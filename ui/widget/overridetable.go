@@ -1,0 +1,719 @@
+package widget
+
+import (
+	"image"
+
+	"gioui.org/gesture"
+	"gioui.org/io/event"
+	"gioui.org/io/key"
+	"gioui.org/io/pointer"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
+	"gioui.org/text"
+	"gioui.org/unit"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+
+	"github.com/qdeck-app/qdeck/service"
+	"github.com/qdeck-app/qdeck/ui/state"
+	"github.com/qdeck-app/qdeck/ui/theme"
+)
+
+const (
+	overrideDefaultRatio         = 0.6
+	overrideMinRatio     float32 = 0.2
+	overrideMaxRatio     float32 = 0.85
+
+	overrideKeyProportion   = 0.5
+	overrideValueProportion = 0.5
+
+	overridePaddingV       unit.Dp = 4
+	overridePaddingH       unit.Dp = 8
+	overrideIndentPerLevel unit.Dp = 12
+	overrideStickyPaddingV unit.Dp = 6
+	overrideScrollbarWidth unit.Dp = 10 // MinorWidth(6) + 2*MinorPadding(2)
+	overrideSeparatorH     unit.Dp = 1
+	overrideTreeGuideW     unit.Dp = 1
+	overrideDividerW       unit.Dp = 2
+	overrideSubDividerW    unit.Dp = 1
+	overrideNoHover                = -1
+	overrideMarkerW        unit.Dp = 4
+	overrideMarkerMinH     unit.Dp = 2
+)
+
+// OverrideTable renders a unified table with default values on the left and
+// editable override editors on the right. Supports up to MaxCustomColumns
+// independent editor columns side by side. Uses a single virtualized list so
+// that row heights always match. A draggable vertical divider separates the
+// default values from the override columns.
+type OverrideTable struct {
+	Theme *material.Theme
+	List  *widget.List
+
+	// ColumnEditors holds editor slices for each active column.
+	// Set by the page before Layout each frame (slice header copies, no alloc).
+	ColumnEditors [state.MaxCustomColumns][]widget.Editor
+
+	// ColumnStates provides access to cached override flags per column.
+	// Set by the page before Layout each frame (pointer copies, no alloc).
+	ColumnStates [state.MaxCustomColumns]*state.CustomColumnState
+
+	// ColumnCount is the number of active override columns (1-3).
+	ColumnCount int
+
+	// ColumnRatio controls the left proportion (0..1). Defaults to overrideDefaultRatio.
+	ColumnRatio float32
+
+	hovers     []gesture.Hover
+	cellClicks []gesture.Click
+	HoveredRow int
+
+	// Column resize drag state (same pattern as SplitView).
+	drag   bool
+	dragID pointer.ID
+	dragX  float32
+
+	// OnChanged fires when any override editor text changes.
+	// The callback receives the column index, the generated YAML string,
+	// and an error if YAML serialization failed.
+	OnChanged func(colIdx int, yamlText string, err error)
+
+	// OnCellFocused fires when a cell is clicked/focused.
+	// The callback receives the visible row index and column index.
+	OnCellFocused func(row, col int)
+}
+
+func (t *OverrideTable) ensureHovers(count int) {
+	if count > len(t.hovers) {
+		t.hovers = append(t.hovers, make([]gesture.Hover, count-len(t.hovers))...)
+	}
+}
+
+func (t *OverrideTable) ensureCellClicks(count int) {
+	if count > len(t.cellClicks) {
+		t.cellClicks = append(t.cellClicks, make([]gesture.Click, count-len(t.cellClicks))...)
+	}
+}
+
+func (t *OverrideTable) ratio() float32 {
+	if t.ColumnRatio <= 0 {
+		return overrideDefaultRatio
+	}
+
+	return t.ColumnRatio
+}
+
+func (t *OverrideTable) colCount() int {
+	if t.ColumnCount < 1 {
+		return 1
+	}
+
+	return t.ColumnCount
+}
+
+// colGeometry holds the computed sub-column layout metrics for the right panel.
+type colGeometry struct {
+	count      int
+	leftW      int
+	dividerW   int
+	subDivW    int
+	totalDivW  int
+	colW       int
+	rightStart int
+}
+
+// columnGeometry computes sub-column widths and positions for the right panel.
+func columnGeometry(gtx layout.Context, leftW, dividerW, rightW, colCount int) colGeometry {
+	subDivW := gtx.Dp(overrideSubDividerW)
+	totalDivW := subDivW * (colCount - 1)
+	colW := max((rightW-totalDivW)/colCount, 0)
+
+	return colGeometry{
+		count:      colCount,
+		leftW:      leftW,
+		dividerW:   dividerW,
+		subDivW:    subDivW,
+		totalDivW:  totalDivW,
+		colW:       colW,
+		rightStart: leftW + dividerW,
+	}
+}
+
+// overrideHint returns the editor placeholder for the given value type.
+func overrideHint(entryType string) string {
+	switch entryType {
+	case "string":
+		return "click to override (string)"
+	case "number":
+		return "click to override (number)"
+	case "bool":
+		return "click to override (bool)"
+	case "null":
+		return "click to override (null)"
+	case "unknown":
+		return "click to override (unknown)"
+	default:
+		return "click to override"
+	}
+}
+
+// Layout renders the unified table with key, default value, and override editor columns.
+func (t *OverrideTable) Layout(
+	gtx layout.Context,
+	entries []service.FlatValueEntry,
+	filteredIndices []int,
+) layout.Dimensions {
+	t.List.Axis = layout.Vertical
+	t.ensureHovers(len(filteredIndices))
+	t.ensureCellClicks(len(filteredIndices))
+
+	t.HoveredRow = overrideNoHover
+
+	t.handleDrag(gtx)
+
+	parent := t.stickyParent(entries, filteredIndices)
+
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			return material.List(t.Theme, t.List).Layout(gtx, len(filteredIndices),
+				func(gtx layout.Context, index int) layout.Dimensions {
+					return t.layoutRow(gtx, entries, filteredIndices, index)
+				})
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			if parent == "" {
+				return layout.Dimensions{}
+			}
+
+			return t.layoutStickyHeader(gtx, parent)
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			t.layoutScrollbarMarkers(gtx, entries, filteredIndices)
+
+			return layout.Dimensions{}
+		}),
+	)
+}
+
+func (t *OverrideTable) layoutRow(
+	gtx layout.Context,
+	entries []service.FlatValueEntry,
+	filteredIndices []int,
+	index int,
+) layout.Dimensions {
+	if index >= len(filteredIndices) {
+		return layout.Dimensions{}
+	}
+
+	entryIdx := filteredIndices[index]
+	if entryIdx >= len(entries) {
+		return layout.Dimensions{}
+	}
+
+	entry := entries[entryIdx]
+	indent := overrideIndentPerLevel * unit.Dp(max(0, entry.Depth-1))
+	section := entry.IsSection()
+
+	hovered := t.hovers[index].Update(gtx.Source)
+	if hovered {
+		t.HoveredRow = index
+	} else if t.HoveredRow == index {
+		t.HoveredRow = overrideNoHover
+	}
+
+	keyText := lastSegment(entry.Key)
+	if hovered {
+		keyText = entry.Key
+	}
+
+	t.processEditorChanges(gtx, entries, entryIdx, section)
+
+	// Record content for z-order.
+	m := op.Record(gtx.Ops)
+
+	ratio := t.ratio()
+	dividerW := gtx.Dp(overrideDividerW)
+	totalW := gtx.Constraints.Max.X
+	leftW := int(ratio * float32(totalW))
+	rightW := max(totalW-leftW-dividerW, 0)
+
+	g := columnGeometry(gtx, leftW, dividerW, rightW, t.colCount())
+
+	dims := layout.Inset{
+		Top: overridePaddingV, Bottom: overridePaddingV,
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			// Comment above entry (optional), constrained to left panel width.
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if entry.Comment == "" {
+					return layout.Dimensions{}
+				}
+
+				gtx.Constraints.Max.X = leftW
+
+				return layout.Inset{Left: overridePaddingH}.Layout(gtx,
+					func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: indent}.Layout(gtx,
+							func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Caption(t.Theme, entry.Comment)
+								lbl.Color = theme.ColorMuted
+
+								return lbl.Layout(gtx)
+							})
+					})
+			}),
+			// Main row: left (key + value) | divider | right (override columns)
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{}.Layout(gtx,
+					// Left portion: key + default value
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = leftW
+						gtx.Constraints.Max.X = leftW
+
+						return layout.Inset{Left: overridePaddingH, Right: overridePaddingH}.Layout(gtx,
+							func(gtx layout.Context) layout.Dimensions {
+								return layout.Flex{}.Layout(gtx,
+									layout.Flexed(overrideKeyProportion, func(gtx layout.Context) layout.Dimensions {
+										return layout.Inset{Left: indent}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+											displayKey := keyText
+											if section {
+												displayKey += ":"
+											}
+
+											lbl := material.Body2(t.Theme, displayKey)
+											lbl.MaxLines = 1
+
+											return lbl.Layout(gtx)
+										})
+									}),
+									layout.Flexed(overrideValueProportion, func(gtx layout.Context) layout.Dimensions {
+										lbl := material.Body2(t.Theme, entry.Value)
+										lbl.MaxLines = 1
+										lbl.Alignment = text.End
+
+										return lbl.Layout(gtx)
+									}),
+								)
+							})
+					}),
+					// Main divider
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Dimensions{Size: image.Pt(dividerW, 0)}
+					}),
+					// Right portion: override editor sub-columns
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = rightW
+						gtx.Constraints.Max.X = rightW
+
+						if section {
+							return layout.Dimensions{Size: image.Pt(rightW, 0)}
+						}
+
+						return t.layoutRightColumns(gtx, entryIdx, g, entry.Type)
+					}),
+				)
+			}),
+		)
+	})
+
+	c := m.Stop()
+
+	// Clip rect for entire row.
+	defer clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops).Pop()
+
+	// Register hover gesture.
+	t.hovers[index].Add(gtx.Ops)
+
+	// Register click gesture for the right cell and set text cursor.
+	t.cellClicks[index].Add(gtx.Ops)
+
+	if !section {
+		t.handleCellClick(gtx, index, entryIdx, g, rightW, dims.Size.Y)
+	}
+
+	// Override highlight or hover background.
+	hasOverride := !section && t.hasAnyOverride(entryIdx)
+
+	switch {
+	case hasOverride:
+		paintRowBg(gtx, dims.Size.Y, theme.ColorOverride)
+	case hovered:
+		paintRowBg(gtx, dims.Size.Y, theme.ColorHover)
+	}
+
+	// Replay content.
+	c.Add(gtx.Ops)
+
+	// Row decorations: divider, sub-column dividers, tree guides, separator.
+	t.drawRowDecorations(gtx, g, entry, dims, totalW)
+
+	return dims
+}
+
+// layoutRightColumns renders the editor sub-columns in the right panel.
+func (t *OverrideTable) layoutRightColumns(
+	gtx layout.Context,
+	entryIdx int,
+	g colGeometry,
+	entryType string,
+) layout.Dimensions {
+	rightW := g.colW*g.count + g.totalDivW
+
+	// Use fixed-size array to avoid per-frame allocation.
+	var children [state.MaxCustomColumns * 2]layout.FlexChild
+
+	n := 0
+	hint := overrideHint(entryType)
+
+	for c := range g.count {
+		col := c
+
+		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			w := g.colW
+			// Give any remainder pixels to the last column.
+			if col == g.count-1 {
+				w = rightW - g.totalDivW - g.colW*(g.count-1)
+			}
+
+			gtx.Constraints.Min.X = w
+			gtx.Constraints.Max.X = w
+
+			editors := t.ColumnEditors[col]
+			if entryIdx >= len(editors) {
+				return layout.Dimensions{Size: image.Pt(w, 0)}
+			}
+
+			return layout.Inset{Left: overridePaddingH}.Layout(gtx,
+				func(gtx layout.Context) layout.Dimensions {
+					ed := material.Editor(t.Theme, &editors[entryIdx], hint)
+
+					return ed.Layout(gtx)
+				})
+		})
+		n++
+
+		// Sub-divider between columns (not after the last).
+		if c < g.count-1 {
+			children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Dimensions{Size: image.Pt(g.subDivW, 0)}
+			})
+			n++
+		}
+	}
+
+	return layout.Flex{}.Layout(gtx, children[:n]...)
+}
+
+// processEditorChanges checks for editor changes across all columns.
+func (t *OverrideTable) processEditorChanges(
+	gtx layout.Context,
+	entries []service.FlatValueEntry,
+	entryIdx int,
+	section bool,
+) {
+	if section {
+		return
+	}
+
+	for c := range t.colCount() {
+		editors := t.ColumnEditors[c]
+		if entryIdx >= len(editors) {
+			continue
+		}
+
+		changed := false
+
+		for {
+			ev, ok := editors[entryIdx].Update(gtx)
+			if !ok {
+				break
+			}
+
+			if _, isChange := ev.(widget.ChangeEvent); isChange {
+				changed = true
+			}
+		}
+
+		if changed {
+			if t.ColumnStates[c] != nil {
+				t.ColumnStates[c].MarkOverride(entryIdx, editors[entryIdx].Text() != "")
+			}
+
+			if t.OnChanged != nil {
+				yamlText, yamlErr := state.OverridesToYAML(entries, editors)
+				t.OnChanged(c, yamlText, yamlErr)
+			}
+		}
+	}
+}
+
+// handleCellClick focuses the correct column editor when a right-cell click occurs.
+func (t *OverrideTable) handleCellClick(
+	gtx layout.Context,
+	index int,
+	entryIdx int,
+	g colGeometry,
+	rightW int,
+	rowH int,
+) {
+	for {
+		ev, ok := t.cellClicks[index].Update(gtx.Source)
+		if !ok {
+			break
+		}
+
+		if ev.Kind != gesture.KindPress {
+			continue
+		}
+
+		clickX := ev.Position.X
+		if clickX < g.rightStart {
+			continue
+		}
+
+		// Determine which column was clicked.
+		denom := g.colW + g.subDivW
+		if denom <= 0 {
+			continue
+		}
+
+		col := (clickX - g.rightStart) / denom
+		if col >= g.count {
+			col = g.count - 1
+		}
+
+		editors := t.ColumnEditors[col]
+		if entryIdx < len(editors) {
+			gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
+
+			if t.OnCellFocused != nil {
+				t.OnCellFocused(index, col)
+			}
+		}
+	}
+
+	// Show text cursor over the right cell area.
+	rightArea := clip.Rect{
+		Min: image.Pt(g.rightStart, 0),
+		Max: image.Pt(g.rightStart+rightW, rowH),
+	}.Push(gtx.Ops)
+	pointer.CursorText.Add(gtx.Ops)
+	rightArea.Pop()
+}
+
+// drawRowDecorations renders the divider line, sub-column dividers, tree guides,
+// and horizontal separator for a single row.
+func (t *OverrideTable) drawRowDecorations(
+	gtx layout.Context,
+	g colGeometry,
+	entry service.FlatValueEntry,
+	dims layout.Dimensions,
+	totalW int,
+) {
+	rowH := dims.Size.Y
+
+	// Main vertical divider.
+	divLine := clip.Rect{
+		Min: image.Pt(g.leftW, 0),
+		Max: image.Pt(g.leftW+g.dividerW, rowH),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	divLine.Pop()
+
+	// Sub-column dividers.
+	if g.count > 1 {
+		for c := 1; c < g.count; c++ {
+			x := g.rightStart + c*g.colW + (c-1)*g.subDivW
+
+			line := clip.Rect{
+				Min: image.Pt(x, 0),
+				Max: image.Pt(x+g.subDivW, rowH),
+			}.Push(gtx.Ops)
+			paint.ColorOp{Color: theme.ColorTreeGuide}.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+			line.Pop()
+		}
+	}
+
+	// Tree guide lines.
+	guideW := gtx.Dp(overrideTreeGuideW)
+
+	for d := 1; d < entry.Depth; d++ {
+		x := gtx.Dp(overridePaddingH + unit.Dp(d-1)*overrideIndentPerLevel + overrideIndentPerLevel/2)
+
+		guide := clip.Rect{
+			Min: image.Pt(x, 0),
+			Max: image.Pt(x+guideW, rowH),
+		}.Push(gtx.Ops)
+		paint.ColorOp{Color: theme.ColorTreeGuide}.Add(gtx.Ops)
+		paint.PaintOp{}.Add(gtx.Ops)
+		guide.Pop()
+	}
+
+	// Horizontal separator.
+	separatorH := gtx.Dp(overrideSeparatorH)
+
+	sep := clip.Rect{
+		Min: image.Pt(0, rowH-separatorH),
+		Max: image.Pt(totalW, rowH),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	sep.Pop()
+}
+
+// hasAnyOverride returns true if any column has a non-empty editor for the given entry.
+func (t *OverrideTable) hasAnyOverride(entryIdx int) bool {
+	for c := range t.colCount() {
+		if t.ColumnStates[c] != nil && t.ColumnStates[c].HasOverrideAt(entryIdx) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// handleDrag processes pointer events for the column resize divider.
+func (t *OverrideTable) handleDrag(gtx layout.Context) {
+	ratio := t.ratio()
+	totalW := gtx.Constraints.Max.X
+	dividerW := gtx.Dp(overrideDividerW)
+	dividerX := int(ratio * float32(totalW))
+
+	// Wider hit area for easier dragging.
+	hitPad := gtx.Dp(overridePaddingH)
+
+	barRect := image.Rect(dividerX-hitPad, 0, dividerX+dividerW+hitPad, gtx.Constraints.Max.Y)
+	area := clip.Rect(barRect).Push(gtx.Ops)
+	event.Op(gtx.Ops, t)
+	pointer.CursorColResize.Add(gtx.Ops)
+	area.Pop()
+
+	for {
+		ev, ok := gtx.Event(pointer.Filter{
+			Target: t,
+			Kinds:  pointer.Press | pointer.Drag | pointer.Release | pointer.Cancel,
+		})
+		if !ok {
+			break
+		}
+
+		e, isPtr := ev.(pointer.Event)
+		if !isPtr {
+			continue
+		}
+
+		switch e.Kind {
+		case pointer.Press:
+			if t.drag {
+				break
+			}
+
+			t.dragID = e.PointerID
+			t.dragX = e.Position.X
+			t.drag = true
+		case pointer.Drag:
+			if t.dragID != e.PointerID {
+				break
+			}
+
+			if totalW > 0 {
+				deltaX := e.Position.X - t.dragX
+				t.ColumnRatio = ratio + deltaX/float32(totalW)
+				t.ColumnRatio = max(min(t.ColumnRatio, overrideMaxRatio), overrideMinRatio)
+			}
+
+			t.dragX = e.Position.X
+		case pointer.Release, pointer.Cancel:
+			t.drag = false
+		}
+	}
+}
+
+// stickyParent returns the parent key path for the first visible entry.
+func (t *OverrideTable) stickyParent(entries []service.FlatValueEntry, filteredIndices []int) string {
+	first := t.List.Position.First
+	if first < 0 || first >= len(filteredIndices) {
+		return ""
+	}
+
+	entryIdx := filteredIndices[first]
+	if entryIdx >= len(entries) {
+		return ""
+	}
+
+	return parentPath(entries[entryIdx].Key)
+}
+
+func (t *OverrideTable) layoutStickyHeader(gtx layout.Context, parent string) layout.Dimensions {
+	// Leave space on the right for the scrollbar so the header does not overlap it.
+	scrollW := gtx.Dp(overrideScrollbarWidth)
+	headerW := max(gtx.Constraints.Max.X-scrollW, 0)
+
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			rect := clip.Rect{Max: image.Pt(headerW, gtx.Constraints.Min.Y)}.Push(gtx.Ops)
+			paint.ColorOp{Color: theme.ColorStickyHeader}.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+			rect.Pop()
+
+			return layout.Dimensions{Size: image.Pt(headerW, gtx.Constraints.Min.Y)}
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Max.X = headerW
+
+			return layout.Inset{
+				Top: overrideStickyPaddingV, Bottom: overrideStickyPaddingV,
+				Left: overridePaddingH, Right: overridePaddingH,
+			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Body2(t.Theme, parent)
+				lbl.Color = theme.ColorSecondary
+				lbl.MaxLines = 1
+
+				return lbl.Layout(gtx)
+			})
+		}),
+	)
+}
+
+// layoutScrollbarMarkers draws colored markers alongside the scrollbar for overridden entries.
+func (t *OverrideTable) layoutScrollbarMarkers(
+	gtx layout.Context,
+	entries []service.FlatValueEntry,
+	filteredIndices []int,
+) {
+	totalH := gtx.Constraints.Max.Y
+	totalEntries := len(filteredIndices)
+
+	if totalEntries == 0 || totalH <= 0 {
+		return
+	}
+
+	totalW := gtx.Constraints.Max.X
+	markerW := gtx.Dp(overrideMarkerW)
+	markerH := max(gtx.Dp(overrideMarkerMinH), 1)
+	scrollX := totalW - gtx.Dp(overrideScrollbarWidth)
+
+	for visIdx, entryIdx := range filteredIndices {
+		if entryIdx >= len(entries) {
+			continue
+		}
+
+		if !t.hasAnyOverride(entryIdx) {
+			continue
+		}
+
+		y := int(float64(visIdx) / float64(totalEntries) * float64(totalH))
+
+		rect := clip.Rect{
+			Min: image.Pt(scrollX, y),
+			Max: image.Pt(scrollX+markerW, y+markerH),
+		}.Push(gtx.Ops)
+		paint.ColorOp{Color: theme.ColorScrollMarker}.Add(gtx.Ops)
+		paint.PaintOp{}.Add(gtx.Ops)
+		rect.Pop()
+	}
+}
