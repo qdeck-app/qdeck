@@ -18,12 +18,14 @@ import (
 
 const (
 	breadcrumbMaxSegments = 4
-	breadcrumbMaxChildren = breadcrumbMaxSegments*2 - 1 // segments + separators
+	breadcrumbMaxChildren = breadcrumbMaxSegments*2 + 1 // logo + spacing + segments + separators
 
 	breadcrumbPaddingH     unit.Dp = 16
 	breadcrumbPaddingV     unit.Dp = 10
 	breadcrumbSeparatorPad unit.Dp = 6
 	breadcrumbBorderHeight unit.Dp = 1
+	breadcrumbLogoSize     unit.Dp = 18
+	breadcrumbLogoGap      unit.Dp = 6
 	breadcrumbBoldWeight           = 700
 )
 
@@ -69,6 +71,13 @@ func (b *Breadcrumb) LayoutWithAction(gtx layout.Context, th *material.Theme, ac
 				var children [breadcrumbMaxChildren]layout.FlexChild
 
 				n := 0
+
+				children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Right: breadcrumbLogoGap}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return LayoutLogo(gtx, breadcrumbLogoSize, theme.ColorAccent)
+					})
+				})
+				n++
 
 				for i := range b.Count {
 					idx := i

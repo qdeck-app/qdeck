@@ -1,6 +1,24 @@
-# QDeck
+<p align="center">
+  <img src="assets/qdeck.png" alt="QDeck" width="400">
+</p>
 
-Helm Values Editor.
+<p align="center">The Quarterdeck is the rear section of a ship's upper deck, traditionally reserved for the commanding officer.</p>
+
+# QDeck
+[![Go](https://img.shields.io/github/go-mod/go-version/debrief-dev/debrief)](https://go.dev/)
+[![Go Report Card](https://goreportcard.com/badge/github.com/qdeck-app/qdeck)](https://goreportcard.com/report/github.com/qdeck-app/qdeck)
+[![License](https://img.shields.io/github/license/debrief-dev/debrief)](LICENSE)
+
+Helm values are structured data, not plain text. 
+
+QDeck renders them as navigable tables, not walls of YAML.
+
+* See how your values differ from chart defaults — additions, removals, and overrides at a glance
+* Preview rendered templates as you edit values. No more save-run-check cycles.
+* Navigate sub-charts and their values in a single view. No need to juggle multiple files.
+* Works with local charts on disk
+* macOS, Windows, Linux
+
 
 ## Development
 
@@ -28,3 +46,5 @@ Copyright © 2026 bosiakov
 Licensed under MIT (see [LICENSE](LICENSE)).
 
 The font `ui/font/FiraCode-Regular.ttf` is licensed under the OFL-1.1. See [ui/font/LICENSE](ui/font/LICENSE) for details.
+
+All fonts are legally licensed to Yauheni Basiakou via MyFonts.
