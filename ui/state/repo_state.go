@@ -37,6 +37,7 @@ type RepoPageState struct {
 	AddButton      widget.Clickable
 	SubmitButton   widget.Clickable
 	AddFormVisible bool
+	PresetClicks   []widget.Clickable
 
 	// Widget state: context actions
 	DeleteClicks []widget.Clickable
@@ -80,6 +81,13 @@ func (s *RepoPageState) EnsureClickables(count int) {
 		s.RepoClicks = append(s.RepoClicks, widget.Clickable{})
 		s.DeleteClicks = append(s.DeleteClicks, widget.Clickable{})
 		s.UpdateClicks = append(s.UpdateClicks, widget.Clickable{})
+	}
+}
+
+// EnsurePresetClickables grows preset clickable slice to match the given count.
+func (s *RepoPageState) EnsurePresetClickables(count int) {
+	for len(s.PresetClicks) < count {
+		s.PresetClicks = append(s.PresetClicks, widget.Clickable{})
 	}
 }
 
