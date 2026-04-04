@@ -5,9 +5,9 @@
 <p align="center">The Quarterdeck is the rear section of a ship's upper deck, traditionally reserved for the commanding officer.</p>
 
 # QDeck
-[![Go](https://img.shields.io/github/go-mod/go-version/debrief-dev/debrief)](https://go.dev/)
+[![Go](https://img.shields.io/github/go-mod/go-version/qdeck-app/qdeck)](https://go.dev/)
 [![Go Report Card](https://goreportcard.com/badge/github.com/qdeck-app/qdeck)](https://goreportcard.com/report/github.com/qdeck-app/qdeck)
-[![License](https://img.shields.io/github/license/debrief-dev/debrief)](LICENSE)
+[![License](https://img.shields.io/github/license/qdeck-app/qdeck)](LICENSE)
 
 Helm values are structured data, not plain text. 
 

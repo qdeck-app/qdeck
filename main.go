@@ -2,12 +2,14 @@ package main
 
 import (
 	"log"
+	"log/slog"
 	"os"
 
 	"gioui.org/app"
 	"gioui.org/unit"
 	"helm.sh/helm/v3/pkg/cli"
 
+	"github.com/qdeck-app/qdeck/infra/config"
 	"github.com/qdeck-app/qdeck/infrastructure/storage"
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui"
@@ -19,6 +21,8 @@ const (
 )
 
 func main() {
+	slog.Info("starting QDeck", "version", config.AppVersion)
+
 	go func() {
 		settings := cli.New()
 

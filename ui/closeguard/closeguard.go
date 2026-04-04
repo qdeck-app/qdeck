@@ -52,7 +52,7 @@ func (g *CloseGuard) PollCloseAttempt() bool {
 // Invalidate runs in a separate goroutine because sendCloseAttempt may be
 // called from a CGo callback or Windows callback on the main thread.
 // No-op after Close has been called.
-func (g *CloseGuard) sendCloseAttempt() {
+func (g *CloseGuard) sendCloseAttempt() { //nolint:unused // called from platform-specific CGo callbacks (_macos.go, _windows.go)
 	if g.closed.Load() {
 		return
 	}

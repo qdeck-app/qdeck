@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	gioui.org v0.9.0
+	gioui.org/x v0.9.0
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.20.0
 )
@@ -11,7 +12,7 @@ require (
 require (
 	dario.cat/mergo v1.0.1 // indirect
 	gioui.org/shader v1.0.8 // indirect
-	gioui.org/x v0.9.0 // indirect
+	git.wow.st/gmp/jni v0.0.0-20210610011705-34026c7e22d0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/MakeNowJust/heredoc v1.0.0 // indirect
@@ -41,6 +42,7 @@ require (
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/go-text/typesetting v0.3.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect

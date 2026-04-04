@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.5
+Name=QDeck
+Exec=qdeck
+Terminal=false
+Type=Application
+Icon=qdeck
+Categories=Shell;Development;
