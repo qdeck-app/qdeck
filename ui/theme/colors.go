@@ -21,6 +21,7 @@ var (
 	ColorScrollMarker = color.NRGBA{R: 200, G: 170, B: 50, A: 200}
 	ColorDropdownBg   = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 	ColorBtnCancel    = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
+	ColorInputBorder  = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
 	ColorTextPrimary  = color.NRGBA{A: 255}
 
 	// Focus highlight for keyboard navigation.

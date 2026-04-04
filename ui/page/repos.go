@@ -1,14 +1,17 @@
 package page
 
 import (
+	"image"
 	"path/filepath"
 	"strings"
 
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/unit"
+	"gioui.org/widget"
 	"gioui.org/widget/material"
 
 	"github.com/qdeck-app/qdeck/domain"
@@ -33,7 +36,36 @@ const (
 	browseButtonLabel = "Browse"
 	addRepoLabel      = "+ Add Repository"
 	cancelRepoLabel   = "- Cancel"
+
+	presetChipPadH unit.Dp = 8
+	presetChipPadV unit.Dp = 4
+	presetChipGap  unit.Dp = 6
 )
+
+// presetRepo holds a predefined Helm repository name and URL.
+type presetRepo struct {
+	Name string
+	URL  string
+}
+
+var presetRepos = []presetRepo{
+	{"bitnami", "https://charts.bitnami.com/bitnami"},
+	{"ingress-nginx", "https://kubernetes.github.io/ingress-nginx"},
+	{"jetstack", "https://charts.jetstack.io"},
+	{"prometheus", "https://prometheus-community.github.io/helm-charts"},
+	{"grafana", "https://grafana.github.io/helm-charts"},
+	{"elastic", "https://helm.elastic.co"},
+	{"hashicorp", "https://helm.releases.hashicorp.com"},
+	{"gitlab", "https://charts.gitlab.io"},
+	{"traefik", "https://traefik.github.io/charts"},
+	{"argo", "https://argoproj.github.io/argo-helm"},
+	{"datadog", "https://helm.datadoghq.com"},
+	{"apache", "https://charts.apache.org"},
+	{"nvidia", "https://helm.ngc.nvidia.com/nvidia"},
+	{"cilium", "https://helm.cilium.io"},
+	{"istio", "https://istio-release.storage.googleapis.com/charts"},
+	{"harbor", "https://helm.goharbor.io"},
+}
 
 // ReposPage renders the repository management view.
 type ReposPage struct {
@@ -63,6 +95,7 @@ func (p *ReposPage) Layout(gtx layout.Context) layout.Dimensions {
 	p.State.EnsureClickables(len(p.State.Repos))
 	// Guarantees RecentClicks and RecentRemoveClicks are large enough for list callbacks below.
 	p.State.EnsureRecentClickables(len(p.State.RecentCharts))
+	p.State.EnsurePresetClickables(len(presetRepos))
 
 	// Clamp focus index after data changes (e.g. repo deleted while focused on last item).
 	if maxIdx := p.sectionItemCount(p.State.FocusedSection) - 1; maxIdx < 0 {
@@ -127,7 +160,7 @@ func (p *ReposPage) layoutChartsSection(gtx layout.Context) layout.Dimensions {
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutPanelLabel(gtx, p.Theme, "Charts", 0, sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
+				return layoutPanelLabel(gtx, p.Theme, "Recent Charts", 0, sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutCompactDropZone),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -266,6 +299,14 @@ func (p *ReposPage) layoutAddForm(gtx layout.Context) layout.Dimensions {
 		}
 	}
 
+	// Check preset button clicks.
+	for i := range presetRepos {
+		if p.State.PresetClicks[i].Clicked(gtx) {
+			p.State.AddNameEditor.SetText(presetRepos[i].Name)
+			p.State.AddURLEditor.SetText(presetRepos[i].URL)
+		}
+	}
+
 	return layoutStaticCard(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -277,10 +318,91 @@ func (p *ReposPage) layoutAddForm(gtx layout.Context) layout.Dimensions {
 				return layoutEditorField(gtx, p.Theme, &p.State.AddURLEditor, hint, repoPaddingSmall)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return p.layoutPresetButtons(gtx)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return LayoutTextButton(gtx, p.Theme, &p.State.SubmitButton, "Add", 0)
 			}),
 		)
 	})
+}
+
+func (p *ReposPage) layoutPresetButtons(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Bottom: repoPaddingSmall}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return p.layoutFlowWrap(gtx)
+	})
+}
+
+// layoutFlowWrap arranges preset chips in a horizontal flow that wraps to the next line.
+func (p *ReposPage) layoutFlowWrap(gtx layout.Context) layout.Dimensions {
+	maxWidth := gtx.Constraints.Max.X
+	gap := gtx.Dp(presetChipGap)
+
+	var x, y, rowHeight int
+
+	for i := range presetRepos {
+		// Measure chip size.
+		m := op.Record(gtx.Ops)
+		dims := layoutPresetChip(gtx, p.Theme, &p.State.PresetClicks[i], presetRepos[i].Name)
+		c := m.Stop()
+
+		// Wrap to next row if this chip exceeds the line.
+		if x > 0 && x+gap+dims.Size.X > maxWidth {
+			x = 0
+			y += rowHeight + gap
+			rowHeight = 0
+		}
+
+		if x > 0 {
+			x += gap
+		}
+
+		// Position the recorded chip.
+		stack := op.Offset(image.Pt(x, y)).Push(gtx.Ops)
+		c.Add(gtx.Ops)
+		stack.Pop()
+
+		x += dims.Size.X
+
+		if dims.Size.Y > rowHeight {
+			rowHeight = dims.Size.Y
+		}
+	}
+
+	return layout.Dimensions{Size: image.Pt(maxWidth, y+rowHeight)}
+}
+
+func layoutPresetChip(gtx layout.Context, th *material.Theme, click *widget.Clickable, label string) layout.Dimensions {
+	hovered := click.Hovered()
+
+	lbl := material.Caption(th, label)
+	lbl.Color = theme.ColorAccent
+
+	m := op.Record(gtx.Ops)
+	dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Inset{
+			Left: presetChipPadH, Right: presetChipPadH,
+			Top: presetChipPadV, Bottom: presetChipPadV,
+		}.Layout(gtx, lbl.Layout)
+	})
+	c := m.Stop()
+
+	bounds := image.Rectangle{Max: dims.Size}
+	radius := gtx.Dp(presetChipRadius)
+	bw := gtx.Dp(editorFieldBorderWidth)
+
+	borderColor := theme.ColorInputBorder
+	if hovered {
+		borderColor = theme.ColorAccent
+	}
+
+	paintRoundedBorder(gtx, bounds, radius, bw, borderColor, theme.ColorCardBg)
+
+	c.Add(gtx.Ops)
+
+	pushPointerCursor(gtx, dims, click)
+
+	return dims
 }
 
 func (p *ReposPage) layoutRepoList(gtx layout.Context) layout.Dimensions {

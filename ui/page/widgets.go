@@ -43,13 +43,24 @@ const (
 )
 
 const (
-	textBtnPaddingH     unit.Dp = 6
-	textBtnPaddingV             = cardPaddingV // match card row height
+	textBtnPaddingH unit.Dp = 6
+
+	textBtnPaddingV = cardPaddingV // match card row height
+
 	textBtnCornerRadius unit.Dp = 4
 )
 
 const (
 	focusBorderWidth unit.Dp = 2
+)
+
+const (
+	editorFieldPadH        unit.Dp = 8
+	editorFieldPadV        unit.Dp = 6
+	editorFieldRadius      unit.Dp = 4
+	editorFieldBorderWidth unit.Dp = 1
+
+	presetChipRadius unit.Dp = 12
 )
 
 func layoutCenteredLoading(gtx layout.Context, th *material.Theme) layout.Dimensions {
@@ -113,7 +124,26 @@ func layoutEditorField(gtx layout.Context, th *material.Theme, editor *widget.Ed
 		ed := material.Editor(th, editor, hint)
 		ed.Editor.SingleLine = true
 
-		return ed.Layout(gtx)
+		// Fill available width so all fields are the same length.
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
+		// Record editor layout to measure size for border.
+		m := op.Record(gtx.Ops)
+		dims := layout.Inset{
+			Left: editorFieldPadH, Right: editorFieldPadH,
+			Top: editorFieldPadV, Bottom: editorFieldPadV,
+		}.Layout(gtx, ed.Layout)
+		c := m.Stop()
+
+		bounds := image.Rectangle{Max: dims.Size}
+		radius := gtx.Dp(editorFieldRadius)
+		bw := gtx.Dp(editorFieldBorderWidth)
+
+		paintRoundedBorder(gtx, bounds, radius, bw, theme.ColorInputBorder, theme.ColorDropdownBg)
+
+		c.Add(gtx.Ops)
+
+		return dims
 	})
 }
 
@@ -148,6 +178,29 @@ func paintHoverBg(gtx layout.Context, dims layout.Dimensions, hovered bool) {
 // LayoutTextButton renders a clickable text link with accent color, hover background, and pointer cursor.
 func LayoutTextButton(gtx layout.Context, th *material.Theme, click *widget.Clickable, label string, left unit.Dp) layout.Dimensions {
 	return layoutActionButton(gtx, th, click, label, theme.ColorAccent, left)
+}
+
+// LayoutCompactTextButton renders a clickable text link with minimal vertical padding,
+// suitable for embedding in rows that already provide their own vertical spacing (e.g. breadcrumb).
+func LayoutCompactTextButton(gtx layout.Context, th *material.Theme, click *widget.Clickable, label string) layout.Dimensions {
+	hovered := click.Hovered()
+
+	lbl := material.Body2(th, label)
+	lbl.Color = theme.ColorAccent
+
+	m := op.Record(gtx.Ops)
+	dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Inset{Left: textBtnPaddingH, Right: textBtnPaddingH}.Layout(gtx, lbl.Layout)
+	})
+	c := m.Stop()
+
+	paintHoverBg(gtx, dims, hovered)
+
+	c.Add(gtx.Ops)
+
+	pushPointerCursor(gtx, dims, click)
+
+	return dims
 }
 
 func layoutActionButton(
@@ -261,6 +314,7 @@ func layoutCappedHeight(gtx layout.Context, maxHeight unit.Dp, w layout.Widget) 
 func layoutCardFocusable(gtx layout.Context, click *widget.Clickable, focused bool, w layout.Widget) layout.Dimensions {
 	return layout.Inset{Bottom: cardItemSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		hovered := click.Hovered()
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
 
 		m := op.Record(gtx.Ops)
 		dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -311,6 +365,28 @@ func layoutCardFocusable(gtx layout.Context, click *widget.Clickable, focused bo
 
 		return dims
 	})
+}
+
+// paintRoundedBorder draws a rounded border by painting two concentric rounded rects:
+// the outer one in the border color, the inner one in the fill color.
+func paintRoundedBorder(gtx layout.Context, bounds image.Rectangle, radius, bw int, border, fill color.NRGBA) {
+	// Outer (border color).
+	outer := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
+	paint.ColorOp{Color: border}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	outer.Pop()
+
+	// Inner (fill color), inset by border width.
+	inner := bounds
+	inner.Min = inner.Min.Add(image.Pt(bw, bw))
+	inner.Max = inner.Max.Sub(image.Pt(bw, bw))
+
+	innerRadius := max(radius-bw, 0)
+
+	innerClip := clip.UniformRRect(inner, innerRadius).Push(gtx.Ops)
+	paint.ColorOp{Color: fill}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	innerClip.Pop()
 }
 
 // paintEdgeBorder draws a border by painting four edge rectangles around the bounds in the given color.

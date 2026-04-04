@@ -376,7 +376,7 @@ func (a *Application) layoutBreadcrumbRow(gtx layout.Context) layout.Dimensions 
 	}
 
 	return a.breadcrumb.LayoutWithAction(gtx, a.theme, func(gtx layout.Context) layout.Dimensions {
-		return page.LayoutTextButton(gtx, a.theme, &a.valuesState.SaveChartButton, "Save .tgz", 0)
+		return page.LayoutCompactTextButton(gtx, a.theme, &a.valuesState.SaveChartButton, "Save .tgz")
 	})
 }
 
