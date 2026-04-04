@@ -20,7 +20,7 @@ func revealFile(path string) {
 
 		defer cancel()
 
-		err := exec.CommandContext(ctx,
+		err := exec.CommandContext(ctx, //nolint:gosec // fixed executable, path from internal app state
 			"dbus-send", "--session",
 			"--dest=org.freedesktop.FileManager1",
 			"--type=method_call",
@@ -33,7 +33,7 @@ func revealFile(path string) {
 			fallbackCtx, fallbackCancel := context.WithTimeout(context.Background(), revealTimeout)
 			defer fallbackCancel()
 
-			_ = exec.CommandContext(fallbackCtx, "xdg-open", filepath.Dir(path)).Run()
+			_ = exec.CommandContext(fallbackCtx, "xdg-open", filepath.Dir(path)).Run() //nolint:gosec // fixed executable, path from internal app state
 		}
 	}()
 }
