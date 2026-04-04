@@ -79,7 +79,7 @@ func (t *Target) PollDragState() (DragState, bool) {
 // a CGo //export callback on the main thread; calling Invalidate directly
 // would create a nested CGo call (Invalidate → C.gio_wakeupMainThread)
 // that deadlocks the main thread.
-func (t *Target) sendDrop(paths []string) {
+func (t *Target) sendDrop(paths []string) { //nolint:unused // called from platform-specific CGo callbacks (_macos.go, _windows.go)
 	select {
 	case t.drops <- DropEvent{Paths: paths}:
 	default:
@@ -92,7 +92,7 @@ func (t *Target) sendDrop(paths []string) {
 // sendDragState sends a drag state change and invalidates the window.
 // The channel is drained first so the latest state always wins — OS drag
 // callbacks are serialized on the main thread, so there is no writer race.
-func (t *Target) sendDragState(s DragState) {
+func (t *Target) sendDragState(s DragState) { //nolint:unused // called from platform-specific CGo callbacks (_macos.go, _windows.go)
 	// Drain stale value so the latest state always lands.
 	select {
 	case <-t.drags:
