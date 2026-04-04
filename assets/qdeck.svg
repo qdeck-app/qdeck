@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4600 1448.37">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #0e116b;
+      }
+    </style>
+  </defs>
+  <g>
+    <path class="cls-1" d="M1106.31,321.86V0l-482.79,321.86c0,133.39-54,253.91-141.44,341.35-87.44,87.44-207.96,141.44-341.35,141.44h482.79c266.61,0,482.79-216.18,482.79-482.79Z"/>
+    <path class="cls-1" d="M623.52,1448.37c299.87,0,551.99-205.28,623.52-482.79H0c71.52,277.52,323.65,482.79,623.52,482.79Z"/>
+  </g>
+  <text class="cls-1" x="1450" y="1020" font-family="Garet" font-weight="bold" font-size="900" letter-spacing="-20">qdeck</text>
+</svg>

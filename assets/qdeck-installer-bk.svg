@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="350" viewBox="0 0 500 350">
+  <rect width="500" height="350" fill="#ffffff"/>
+
+  <!-- QDeck logo centered at top (scaled from 1247.03x1448.37 to ~86x100) -->
+  <g transform="translate(207, 15) scale(0.069)">
+    <path fill="#0e116b" d="M1106.31,321.86V0l-482.79,321.86c0,133.39-54,253.91-141.44,341.35-87.44,87.44-207.96,141.44-341.35,141.44h482.79c266.61,0,482.79-216.18,482.79-482.79Z"/>
+    <path fill="#0e116b" d="M623.52,1448.37c299.87,0,551.99-205.28,623.52-482.79H0c71.52,277.52,323.65,482.79,623.52,482.79Z"/>
+  </g>
+
+  <!-- Arrow centered between icon positions (125,150) and (375,150) -->
+  <g transform="translate(226, 126) scale(2)" fill="none" stroke="#333333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 12H20M20 12L14 6M20 12L14 18"/>
+  </g>
+</svg>

@@ -1,0 +1,55 @@
+name: Build Windows
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    # Default shell is PowerShell. Make targets still work because make
+    # invokes recipe lines through its own shell (sh/bash from MSYS2),
+    # so Unix commands (rm, cp, etc.) in the Makefile execute correctly.
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.0
+
+      - name: Install deps
+        run: make install_deps
+
+      - name: Install WiX Toolset
+        run: dotnet tool install --global wix
+
+      - name: Build windows
+        run: make build_windows TAG_NAME=${{ github.ref_name }}
+
+      - name: Build MSI installers
+        run: make build_windows_msi TAG_NAME=${{ github.ref_name }}
+
+      - name: Rename EXE artifacts
+        run: |
+          Move-Item "dist\amd64\QDeck.exe" "dist\qdeck-windows-portable-${{ github.ref_name }}-amd64.exe"
+          Move-Item "dist\arm64\QDeck.exe" "dist\qdeck-windows-portable-${{ github.ref_name }}-arm64.exe"
+
+      - name: Rename MSI artifacts
+        run: |
+          Move-Item "dist\qdeck-windows-${{ github.ref_name }}-amd64.msi" "dist\qdeck-windows-installer-${{ github.ref_name }}-amd64.msi"
+          Move-Item "dist\qdeck-windows-${{ github.ref_name }}-arm64.msi" "dist\qdeck-windows-installer-${{ github.ref_name }}-arm64.msi"
+
+      - name: Upload Release Asset
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} "dist\qdeck-windows-portable-${{ github.ref_name }}-amd64.exe"
+          gh release upload ${{ github.event.release.tag_name }} "dist\qdeck-windows-portable-${{ github.ref_name }}-arm64.exe"
+          gh release upload ${{ github.event.release.tag_name }} "dist\qdeck-windows-installer-${{ github.ref_name }}-amd64.msi"
+          gh release upload ${{ github.event.release.tag_name }} "dist\qdeck-windows-installer-${{ github.ref_name }}-arm64.msi"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
