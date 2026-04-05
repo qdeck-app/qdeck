@@ -265,6 +265,8 @@ func (vc *ValuesController) pollExportRunner() {
 				col := &vc.State.Columns[vc.saveColumnIdx]
 				col.ValuesModified = false
 				col.CustomFilePaths = []string{res.Value}
+
+				vc.State.RebuildHelmInstallCmd()
 			}
 
 			vc.reRenderIfViewerOpen()
@@ -334,6 +336,9 @@ func (vc *ValuesController) ResetState() {
 	vc.NotifState.Clear()
 	vc.State.ColumnCount = 1
 	vc.State.RecentDropdownOpen = false
+	vc.State.ChartName = ""
+	vc.State.RepoName = ""
+	vc.State.HelmInstallCmd = ""
 	vc.State.RenderLoading = false
 
 	for i := range vc.State.Columns {
@@ -369,6 +374,8 @@ func (vc *ValuesController) OnColumnFilesSelected(colIdx int, paths []string) {
 	col := &vc.State.Columns[colIdx]
 	col.CustomFilePaths = paths
 	col.MergedFileCount = len(paths)
+
+	vc.State.RebuildHelmInstallCmd()
 
 	vc.CustomValuesRunners[colIdx].RunWithTimeout(config.ValuesLoadOperation, func(ctx context.Context) (*service.FlatValues, error) {
 		return vc.ValuesService.LoadAndMergeCustomValues(ctx, paths)
@@ -557,6 +564,7 @@ func (vc *ValuesController) onClearColumn(colIdx int) {
 	vc.CustomValuesRunners[colIdx].Stop()
 	vc.EditorParseRunners[colIdx].Stop()
 	vc.State.Columns[colIdx].Reset()
+	vc.State.RebuildHelmInstallCmd()
 }
 
 func (vc *ValuesController) onRemoveColumn(colIdx int) {
@@ -579,6 +587,7 @@ func (vc *ValuesController) onRemoveColumn(colIdx int) {
 	vc.CustomValuesRunners[state.MaxCustomColumns-1] = async.NewRunner[*service.FlatValues](vc.Window, 1)
 	vc.EditorParseRunners[state.MaxCustomColumns-1] = async.NewRunner[*service.FlatValues](vc.Window, 1)
 	vc.State.ColumnCount--
+	vc.State.RebuildHelmInstallCmd()
 
 	// Clamp focused column to remain within active columns.
 	if vc.State.FocusedCol >= vc.State.ColumnCount {

@@ -263,6 +263,9 @@ func (a *Application) pollAsyncResults() {
 
 	pollRunner(a.pullChartRunner, &a.valuesState.Loading, &a.notificationState, func(v string) {
 		a.valuesState.ChartPath = v
+		a.valuesState.ChartName = a.navState.SelectedChart
+		a.valuesState.RepoName = a.navState.SelectedRepo
+		a.valuesState.RebuildHelmInstallCmd()
 		a.valuesCtrl.LoadDefaultValues(v)
 	})
 
@@ -286,6 +289,9 @@ func (a *Application) applyLocalChartResult(res service.LocalChartResult) {
 	a.navState.SelectedVersion = res.Version
 	a.navState.CurrentPage = state.PageValues
 	a.valuesState.ChartPath = res.ChartPath
+	a.valuesState.ChartName = res.Name
+	a.valuesState.RepoName = ""
+	a.valuesState.RebuildHelmInstallCmd()
 	a.valuesCtrl.LoadDefaultValues(res.ChartPath)
 	a.addRecentChart(domain.RecentChart{
 		LocalPath:   res.ChartPath,
