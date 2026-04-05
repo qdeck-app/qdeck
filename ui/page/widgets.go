@@ -3,6 +3,9 @@ package page
 import (
 	"image"
 	"image/color"
+	"math"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gioui.org/io/event"
@@ -11,9 +14,11 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	"golang.org/x/image/math/fixed"
 
 	"github.com/qdeck-app/qdeck/ui/theme"
 	customwidget "github.com/qdeck-app/qdeck/ui/widget"
@@ -402,4 +407,52 @@ func paintEdgeBorder(gtx layout.Context, bounds image.Rectangle, bw int, c color
 // paintFocusBorder draws a focus border by painting four edge rectangles around the bounds.
 func paintFocusBorder(gtx layout.Context, bounds image.Rectangle, bw int) {
 	paintEdgeBorder(gtx, bounds, bw, theme.ColorAccent)
+}
+
+const ellipsisPrefix = "\u2026/"
+
+// truncatePathLeft truncates a file path from the left so it fits within maxWidthPx,
+// prepending "…/" when segments are removed. If the path fits, it is returned as-is.
+func truncatePathLeft(lbl *material.LabelStyle, gtx layout.Context, maxWidthPx int, path string) string {
+	params := text.Parameters{
+		Font:     lbl.Font,
+		PxPerEm:  fixed.I(gtx.Sp(lbl.TextSize)),
+		MaxWidth: math.MaxInt,
+	}
+
+	if measureTextWidth(lbl.Shaper, params, path) <= maxWidthPx {
+		return path
+	}
+
+	budget := maxWidthPx - measureTextWidth(lbl.Shaper, params, ellipsisPrefix)
+	remaining := path
+
+	for {
+		idx := strings.IndexByte(remaining, filepath.Separator)
+		if idx < 0 {
+			break
+		}
+
+		remaining = remaining[idx+1:]
+
+		if measureTextWidth(lbl.Shaper, params, remaining) <= budget {
+			return ellipsisPrefix + remaining
+		}
+	}
+
+	// Even just the filename doesn't fit with ellipsis; return it anyway (label MaxLines will clip).
+	return ellipsisPrefix + remaining
+}
+
+// measureTextWidth returns the pixel width of the given text when shaped with the provided font parameters.
+func measureTextWidth(shaper *text.Shaper, params text.Parameters, str string) int {
+	shaper.LayoutString(params, str)
+
+	var width fixed.Int26_6
+
+	for g, ok := shaper.NextGlyph(); ok; g, ok = shaper.NextGlyph() {
+		width += g.Advance
+	}
+
+	return width.Ceil()
 }
