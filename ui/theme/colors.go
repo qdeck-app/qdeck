@@ -17,6 +17,7 @@ var (
 	ColorStickyHeader = color.NRGBA{R: 240, G: 240, B: 240, A: 245}
 	ColorSeparator    = color.NRGBA{R: 230, G: 230, B: 230, A: 255}
 	ColorTreeGuide    = color.NRGBA{R: 210, G: 210, B: 210, A: 255}
+	ColorIndentTick   = color.NRGBA{R: 195, G: 195, B: 195, A: 255}
 	ColorOverride     = color.NRGBA{R: 255, G: 255, B: 200, A: 255}
 	ColorScrollMarker = color.NRGBA{R: 200, G: 170, B: 50, A: 200}
 	ColorDropdownBg   = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
