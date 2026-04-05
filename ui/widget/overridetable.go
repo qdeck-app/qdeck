@@ -400,6 +400,7 @@ func (t *OverrideTable) layoutRightColumns(
 			return layout.Inset{Left: overridePaddingH}.Layout(gtx,
 				func(gtx layout.Context) layout.Dimensions {
 					ed := material.Editor(t.Theme, &editors[entryIdx], hint)
+					ed.TextSize = viewerEditorTextSize
 
 					// Draw indent ruler ticks for multi-line cells.
 					edText := editors[entryIdx].Text()
