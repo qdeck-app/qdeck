@@ -496,7 +496,7 @@ func (p *ValuesPage) layoutColumnFileStatuses(gtx layout.Context) layout.Dimensi
 // perColW is the pixel width of the last override column; when the buttons
 // would consume more than half of it, "Recent ▾" collapses to just "▾".
 func (p *ValuesPage) layoutTrailingButtons(gtx layout.Context, perColW int) layout.Dimensions {
-	showRecent := len(p.State.RecentValuesFiles) > 0 && len(p.State.Columns[0].CustomFilePaths) == 0
+	showRecent := len(p.State.RecentValuesFiles) > 0
 	showAddCol := p.State.CanAddColumn()
 
 	if !showRecent && !showAddCol {
@@ -820,8 +820,10 @@ func (p *ValuesPage) recentDropdownItems() []layout.FlexChild {
 						func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 								layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-									lbl := material.Caption(p.Theme, filepath.Base(entry.Path))
+									lbl := material.Caption(p.Theme, "")
+									lbl.Text = truncatePathLeft(&lbl, gtx, gtx.Constraints.Max.X, entry.Path)
 									lbl.Color = theme.ColorAccent
+									lbl.MaxLines = 1
 
 									return lbl.Layout(gtx)
 								}),
