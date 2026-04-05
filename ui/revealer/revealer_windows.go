@@ -15,6 +15,6 @@ func revealFile(path string) {
 	go func() {
 		defer cancel()
 
-		_ = exec.CommandContext(ctx, "explorer", `/select,"`+path+`"`).Run() //nolint:gosec // Path is pre-validated by resolve(): Clean, Abs, EvalSymlinks.
+		_ = exec.CommandContext(ctx, "explorer", `/select,`+path).Run() //nolint:gosec // Path is pre-validated by resolve(): Clean, Abs, EvalSymlinks.
 	}()
 }
