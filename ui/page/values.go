@@ -3,9 +3,12 @@ package page
 import (
 	"image"
 	"image/color"
+	"io"
 	"path/filepath"
 	"strconv"
+	"strings"
 
+	"gioui.org/io/clipboard"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -58,6 +61,9 @@ const (
 	recentItemPadV unit.Dp = 2
 
 	maxRecentValues = 10 // must match service/recent_service.go
+
+	copyLabel                    = "Copy"
+	helmCmdMaxWidthRatio float32 = 0.35 // fraction of row width reserved for helm command
 )
 
 // ValuesPageCallbacks bundles every callback the ValuesPage needs from its controller.
@@ -848,6 +854,13 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		p.OnRenderOverrides()
 	}
 
+	if p.State.CopyInstallButton.Clicked(gtx) && p.State.HelmInstallCmd != "" {
+		gtx.Execute(clipboard.WriteCmd{
+			Type: "text/plain",
+			Data: io.NopCloser(strings.NewReader(p.State.HelmInstallCmd)),
+		})
+	}
+
 	return layout.Inset{
 		Left: valuesSpacing, Right: valuesSpacing,
 		Bottom: valuesPaddingSmall,
@@ -855,7 +868,8 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		defaultsHint := customwidget.ShortcutLabel("\u2318+1", "F3")
 		overridesHint := customwidget.ShortcutLabel("\u2318+2", "F4")
 
-		const maxRenderChildren = 3 // defaults + overrides + loading
+		// defaults + overrides + loading + spacer + helm cmd + copy
+		const maxRenderChildren = 6
 
 		var (
 			children [maxRenderChildren]layout.FlexChild
@@ -882,6 +896,32 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 
 					return lbl.Layout(gtx)
 				})
+			})
+			n++
+		}
+
+		if p.State.HelmInstallCmd != "" {
+			cmd := p.State.HelmInstallCmd
+
+			children[n] = layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return layout.Dimensions{Size: image.Pt(gtx.Constraints.Min.X, 0)}
+			})
+			n++
+
+			children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				maxW := int(helmCmdMaxWidthRatio * float32(gtx.Constraints.Max.X))
+				gtx.Constraints.Max.X = maxW
+
+				lbl := material.Body2(p.Theme, cmd)
+				lbl.Color = theme.ColorSecondary
+				lbl.MaxLines = 1
+
+				return lbl.Layout(gtx)
+			})
+			n++
+
+			children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return LayoutTextButton(gtx, p.Theme, &p.State.CopyInstallButton, copyLabel, valuesSpacing)
 			})
 			n++
 		}

@@ -1,11 +1,16 @@
 package state
 
 import (
+	"path/filepath"
+	"strings"
+
 	"gioui.org/widget"
 
 	"github.com/qdeck-app/qdeck/domain"
 	"github.com/qdeck-app/qdeck/service"
 )
+
+const helmInstallPrefix = "helm install"
 
 // CustomColumnState holds per-column widget state for an editable override column.
 type CustomColumnState struct {
@@ -126,6 +131,8 @@ type ValuesPageState struct {
 	// Data
 	DefaultValues *service.FlatValues
 	ChartPath     string
+	ChartName     string
+	RepoName      string
 	Loading       bool
 
 	// Multi-column override state
@@ -165,6 +172,10 @@ type ValuesPageState struct {
 	RenderDefaultsButton  widget.Clickable
 	RenderOverridesButton widget.Clickable
 	RenderLoading         bool
+
+	// Helm install command (cached, rebuilt on chart/file changes)
+	HelmInstallCmd    string
+	CopyInstallButton widget.Clickable
 }
 
 // HasUnsavedChanges returns true if any active column has unsaved modifications.
@@ -211,4 +222,35 @@ func (s *ValuesPageState) EnsureRecentValuesClickables(count int) {
 		s.RecentValuesClicks = append(s.RecentValuesClicks, widget.Clickable{})
 		s.RecentValuesRemoveClicks = append(s.RecentValuesRemoveClicks, widget.Clickable{})
 	}
+}
+
+// RebuildHelmInstallCmd reconstructs the cached helm install command from
+// the current chart reference and loaded values files.
+func (s *ValuesPageState) RebuildHelmInstallCmd() {
+	var chartRef, releaseName string
+
+	if s.RepoName != "" {
+		chartRef = s.RepoName + "/" + s.ChartName
+		releaseName = s.ChartName
+	} else {
+		chartRef = s.ChartPath
+		releaseName = filepath.Base(s.ChartPath)
+	}
+
+	if chartRef == "" {
+		s.HelmInstallCmd = ""
+
+		return
+	}
+
+	var cmd strings.Builder
+	cmd.WriteString(helmInstallPrefix + " " + releaseName + " " + chartRef)
+
+	for c := range s.ColumnCount {
+		for _, fp := range s.Columns[c].CustomFilePaths {
+			cmd.WriteString(" -f " + fp)
+		}
+	}
+
+	s.HelmInstallCmd = cmd.String()
 }
