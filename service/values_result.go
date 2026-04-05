@@ -5,6 +5,7 @@ import "github.com/qdeck-app/qdeck/domain"
 type FlatValues struct {
 	Entries   []FlatValueEntry
 	RawValues map[string]any // original nested map for smart matching (nil for defaults)
+	Indent    int            // detected YAML indentation spaces (0 = use default)
 }
 
 type FlatValueEntry struct {

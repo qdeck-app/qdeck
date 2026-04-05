@@ -10,6 +10,16 @@ import (
 	"github.com/qdeck-app/qdeck/service"
 )
 
+// YAMLIndent returns the detected indentation for this column's loaded file,
+// falling back to DefaultYAMLIndent for new files or when no file is loaded.
+func (c *CustomColumnState) YAMLIndent() int {
+	if c.CustomValues != nil && c.CustomValues.Indent > 0 {
+		return c.CustomValues.Indent
+	}
+
+	return service.DefaultYAMLIndent
+}
+
 const helmInstallPrefix = "helm install"
 
 // CustomColumnState holds per-column widget state for an editable override column.
