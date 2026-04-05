@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"strconv"
@@ -10,9 +11,44 @@ import (
 )
 
 const (
-	yamlIndent  = 2
-	maxKeyIndex = 10000
+	DefaultYAMLIndent = 2
+	maxYAMLIndent     = 8
+	maxKeyIndex       = 10000
 )
+
+// DetectYAMLIndent scans raw YAML bytes and returns the smallest indentation
+// found across all indented content lines. This avoids mis-detecting when the
+// first indented line is deeply nested (e.g. 8 spaces at indent-4, depth-2).
+// Tab-indented lines are ignored — only space indentation is considered.
+// Returns DefaultYAMLIndent when no indentation is found (e.g. flat files or
+// empty input). The result is clamped to [1, 8].
+func DetectYAMLIndent(data []byte) int {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	minIndent := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || line == "---" || line == "..." {
+			continue
+		}
+
+		trimmed := strings.TrimLeft(line, " ")
+		if trimmed == "" || trimmed[0] == '#' {
+			continue
+		}
+
+		spaces := len(line) - len(trimmed)
+		if spaces > 0 && (minIndent == 0 || spaces < minIndent) {
+			minIndent = spaces
+		}
+	}
+
+	if minIndent == 0 {
+		return DefaultYAMLIndent
+	}
+
+	return min(max(minIndent, 1), maxYAMLIndent)
+}
 
 // OverrideEntry holds a single flat key-value pair for YAML reconstruction.
 type OverrideEntry struct {
@@ -30,8 +66,9 @@ type keySegment struct {
 }
 
 // FlatEntriesToYAML reconstructs nested YAML from flat dot-separated key-value pairs.
+// indent controls the number of spaces per nesting level in the output.
 // Returns empty string when entries is empty.
-func FlatEntriesToYAML(entries []OverrideEntry) (string, error) {
+func FlatEntriesToYAML(entries []OverrideEntry, indent int) (string, error) {
 	if len(entries) == 0 {
 		return "", nil
 	}
@@ -58,7 +95,7 @@ func FlatEntriesToYAML(entries []OverrideEntry) (string, error) {
 	var buf bytes.Buffer
 
 	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(yamlIndent)
+	enc.SetIndent(indent)
 
 	if err := enc.Encode(root); err != nil {
 		return "", fmt.Errorf("marshal overrides to YAML: %w", err)

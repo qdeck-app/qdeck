@@ -5,6 +5,7 @@ type ValuesFile struct {
 	Source    string         // file path or "default"
 	Entries   []ValuesEntry  // pre-flattened, sorted by key
 	RawValues map[string]any // original nested map (nil for default values)
+	Indent    int            // detected YAML indentation spaces (0 = use default)
 }
 
 // ValuesEntry is a single key-value pair from a flattened YAML structure.

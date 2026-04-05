@@ -195,6 +195,12 @@ func (vc *ValuesController) pollEditorParse() {
 				col.EditorParseError = res.Err.Error()
 			} else {
 				col.EditorParseError = ""
+
+				// Preserve detected YAML indent from the originally loaded file.
+				if col.CustomValues != nil && col.CustomValues.Indent > 0 {
+					res.Value.Indent = col.CustomValues.Indent
+				}
+
 				col.CustomValues = res.Value
 			}
 		}
@@ -503,7 +509,7 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 
 	col := &vc.State.Columns[colIdx]
 
-	yamlText, err := state.OverridesToYAML(vc.State.DefaultValues.Entries, col.OverrideEditors)
+	yamlText, err := state.OverridesToYAML(vc.State.DefaultValues.Entries, col.OverrideEditors, col.YAMLIndent())
 	if err != nil {
 		vc.NotifState.Show(err.Error(), state.NotificationError, time.Now())
 

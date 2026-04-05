@@ -165,6 +165,8 @@ func (s *ValuesService) ReadCustomValues(ctx context.Context, filePath string) (
 
 	rawData, readErr := os.ReadFile(filePath) //nolint:gosec // filePath already validated by ReadValuesFile above
 	if readErr == nil {
+		vf.Indent = DetectYAMLIndent(rawData)
+
 		// Silently ignore comment parse errors—if comments can't be extracted,
 		// values are still valid, just without associated documentation.
 		if comments, parseErr := parseComments(rawData); parseErr == nil {
@@ -183,18 +185,27 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 	}
 
 	merged := make(map[string]any)
+	indent := DefaultYAMLIndent
 
-	for _, path := range paths {
+	for i, path := range paths {
 		vals, err := chartutil.ReadValuesFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read values file %s: %w", path, err)
 		}
 
 		deepMerge(merged, vals)
+
+		// Detect indentation from the first file.
+		if i == 0 {
+			if rawData, readErr := os.ReadFile(path); readErr == nil { //nolint:gosec // path validated by ReadValuesFile
+				indent = DetectYAMLIndent(rawData)
+			}
+		}
 	}
 
 	vf := flattenValues("merged", merged)
 	vf.RawValues = merged
+	vf.Indent = indent
 
 	return vf, nil
 }
@@ -281,7 +292,7 @@ func toFlatDTO(vf *domain.ValuesFile) *FlatValues {
 		}
 	}
 
-	return &FlatValues{Entries: entries, RawValues: vf.RawValues}
+	return &FlatValues{Entries: entries, RawValues: vf.RawValues, Indent: vf.Indent}
 }
 
 // flattenValues converts a nested map[string]any to a sorted flat list.

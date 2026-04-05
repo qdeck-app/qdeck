@@ -442,7 +442,12 @@ func (t *OverrideTable) processEditorChanges(
 			}
 
 			if t.OnChanged != nil {
-				yamlText, yamlErr := state.OverridesToYAML(entries, editors)
+				indent := service.DefaultYAMLIndent
+				if t.ColumnStates[c] != nil {
+					indent = t.ColumnStates[c].YAMLIndent()
+				}
+
+				yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent)
 				t.OnChanged(c, yamlText, yamlErr)
 			}
 		}

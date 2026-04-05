@@ -11,14 +11,15 @@ import (
 // OverridesToYAML builds nested YAML from non-empty override editors.
 // Only entries with non-empty editor text are included.
 // Section headers (map/list) are skipped.
+// indent controls the number of spaces per nesting level in the output.
 // Returns empty string with nil error when no overrides are present.
-func OverridesToYAML(entries []service.FlatValueEntry, editors []widget.Editor) (string, error) {
+func OverridesToYAML(entries []service.FlatValueEntry, editors []widget.Editor, indent int) (string, error) {
 	overrides := collectOverrides(entries, editors)
 	if len(overrides) == 0 {
 		return "", nil
 	}
 
-	yamlText, err := service.FlatEntriesToYAML(overrides)
+	yamlText, err := service.FlatEntriesToYAML(overrides, indent)
 	if err != nil {
 		return "", fmt.Errorf("overrides to YAML: %w", err)
 	}
