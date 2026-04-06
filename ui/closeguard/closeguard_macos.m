@@ -26,7 +26,7 @@ static BOOL imp_windowShouldClose(id self, SEL _cmd, id sender) {
 	return YES;
 }
 
-void setCloseGuard(BOOL guarded) {
+void setCloseGuard(_Bool guarded) {
 	gCloseGuarded = guarded;
 }
 
