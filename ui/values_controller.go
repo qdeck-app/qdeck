@@ -406,9 +406,9 @@ func (vc *ValuesController) OnColumnFilesSelected(colIdx int, paths []string) {
 	}()
 }
 
-func (vc *ValuesController) onOpenColumnFile(colIdx int) {
+func (vc *ValuesController) openFilePicker(result filePickerResult, extensions ...string) {
 	vc.FilePickerRunner.RunBlocking(func() (filePickerResult, error) {
-		reader, err := vc.Explorer.ChooseFile(".yaml", ".yml", ".json")
+		reader, err := vc.Explorer.ChooseFile(extensions...)
 		if err != nil {
 			return filePickerResult{}, fmt.Errorf("file picker: %w", err)
 		}
@@ -420,26 +420,18 @@ func (vc *ValuesController) onOpenColumnFile(colIdx int) {
 			return filePickerResult{}, errors.New("file picker: unsupported platform reader type")
 		}
 
-		return filePickerResult{path: f.Name(), columnIdx: colIdx}, nil
+		result.path = f.Name()
+
+		return result, nil
 	})
 }
 
+func (vc *ValuesController) onOpenColumnFile(colIdx int) {
+	vc.openFilePicker(filePickerResult{columnIdx: colIdx}, ".yaml", ".yml", ".json")
+}
+
 func (vc *ValuesController) OnOpenChartFilePicker() {
-	vc.FilePickerRunner.RunBlocking(func() (filePickerResult, error) {
-		reader, err := vc.Explorer.ChooseFile(".tgz")
-		if err != nil {
-			return filePickerResult{}, fmt.Errorf("chart file picker: %w", err)
-		}
-
-		defer func() { _ = reader.Close() }()
-
-		f, ok := reader.(*os.File)
-		if !ok {
-			return filePickerResult{}, errors.New("chart file picker: unsupported platform reader type")
-		}
-
-		return filePickerResult{path: f.Name(), isChartPicker: true}, nil
-	})
+	vc.openFilePicker(filePickerResult{isChartPicker: true}, ".tgz", ".yaml", ".yml")
 }
 
 func (vc *ValuesController) onRevealColumnFile(colIdx int) {

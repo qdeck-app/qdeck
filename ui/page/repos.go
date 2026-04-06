@@ -32,7 +32,7 @@ const (
 	recentChartsMaxHeight      unit.Dp = 300
 	repoListMaxHeight          unit.Dp = 400
 
-	homeDropZoneTitle = "Drop chart directory or .tar.gz here"
+	homeDropZoneTitle = "Drop chart directory, Chart.yaml, or .tar.gz here"
 	browseButtonLabel = "Browse"
 	addRepoLabel      = "+ Add Repository"
 	cancelRepoLabel   = "- Cancel"
