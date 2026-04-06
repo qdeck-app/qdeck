@@ -201,6 +201,14 @@ func (s *ChartService) LoadLocalChart(ctx context.Context, path string) (LocalCh
 		return LocalChartResult{}, fmt.Errorf("load local chart: %w", ctx.Err())
 	}
 
+	// Resolve Chart.yaml / Chart.yml to parent directory.
+	base := filepath.Base(path)
+	if strings.EqualFold(base, "Chart.yaml") || strings.EqualFold(base, "Chart.yml") {
+		path = filepath.Dir(path)
+	} else if strings.HasSuffix(strings.ToLower(base), ".yaml") || strings.HasSuffix(strings.ToLower(base), ".yml") {
+		return LocalChartResult{}, fmt.Errorf("load local chart: expected Chart.yaml or Chart.yml, got %s", base)
+	}
+
 	ch, err := loader.Load(path)
 	if err != nil {
 		return LocalChartResult{}, fmt.Errorf("load local chart from %s: %w", path, err)
