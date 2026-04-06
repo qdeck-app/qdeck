@@ -3,10 +3,12 @@
     Name="QDeck"
     Manufacturer="qdeck-app"
     Version="$(var.ProductVersion)"
-    UpgradeCode="bffcc9b4-9146-49c2-9c4a-e0a3bebbd1c3"
+    UpgradeCode="8575b69c-0f6a-4389-b5e0-aae9b4fc20b8"
     Scope="perMachine">
 
     <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
+      Schedule="afterInstallInitialize"
       DowngradeErrorMessage="A newer version of QDeck is already installed." />
 
     <MediaTemplate EmbedCab="yes" />
@@ -16,12 +18,12 @@
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="QDeck">
-        <Component Id="MainExecutable" Guid="9ee4b037-222a-45cb-bcf9-bde6a50a4a34">
+        <Component Id="MainExecutable" Guid="5ed70e76-3b0c-459a-bb42-de6428da9c89">
           <File Id="QDeckExe"
                 Source="$(var.ExePath)"
                 KeyPath="yes" />
         </Component>
-        <Component Id="LicenseFile" Guid="b77d7e71-d2bd-43e4-a2d6-601860ec015a">
+        <Component Id="LicenseFile" Guid="82c8cff7-35e3-4738-ab79-02b6b29f25a1">
           <File Id="LicenseFile"
                 Source="$(var.LicensePath)"
                 KeyPath="yes" />
@@ -30,7 +32,7 @@
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
-      <Component Id="StartMenuShortcut" Guid="590d736f-b3ee-4ffb-a240-bf70c43bbd74">
+      <Component Id="StartMenuShortcut" Guid="373a070d-212a-46d3-bf4c-c57622c4d6b3">
         <Shortcut Id="QDeckShortcut"
                   Name="QDeck"
                   Target="[INSTALLFOLDER]QDeck.exe"
