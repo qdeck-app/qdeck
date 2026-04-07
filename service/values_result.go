@@ -1,11 +1,16 @@
 package service
 
-import "github.com/qdeck-app/qdeck/domain"
+import (
+	"gopkg.in/yaml.v3"
+
+	"github.com/qdeck-app/qdeck/domain"
+)
 
 type FlatValues struct {
 	Entries   []FlatValueEntry
 	RawValues map[string]any // original nested map for smart matching (nil for defaults)
 	Indent    int            // detected YAML indentation spaces (0 = use default)
+	NodeTree  *yaml.Node     // parsed yaml.Node tree for comment-preserving serialization (nil for defaults)
 }
 
 type FlatValueEntry struct {

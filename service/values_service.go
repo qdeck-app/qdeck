@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
@@ -172,20 +173,28 @@ func (s *ValuesService) ReadCustomValues(ctx context.Context, filePath string) (
 		if comments, parseErr := parseComments(rawData); parseErr == nil {
 			attachComments(vf, comments)
 		}
+
+		var doc yaml.Node
+		if parseErr := yaml.Unmarshal(rawData, &doc); parseErr == nil && len(doc.Content) > 0 {
+			vf.NodeTree = doc.Content[0]
+		}
 	}
 
 	return vf, nil
 }
 
 // ReadAndMergeCustomValues loads multiple values files and deep-merges them.
-// Later files override earlier ones.
+// Later files override earlier ones. Comments from later files override earlier ones.
 func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []string) (*domain.ValuesFile, error) {
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("read and merge custom values: %w", ctx.Err())
 	}
 
 	merged := make(map[string]any)
+	mergedComments := make(map[string]string)
 	indent := DefaultYAMLIndent
+
+	var lastNodeTree *yaml.Node
 
 	for i, path := range paths {
 		vals, err := chartutil.ReadValuesFile(path)
@@ -195,10 +204,27 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 
 		deepMerge(merged, vals)
 
-		// Detect indentation from the first file.
-		if i == 0 {
-			if rawData, readErr := os.ReadFile(path); readErr == nil { //nolint:gosec // path validated by ReadValuesFile
+		rawData, readErr := os.ReadFile(path) //nolint:gosec // path validated by ReadValuesFile
+		if readErr == nil {
+			// Detect indentation from the first file.
+			if i == 0 {
 				indent = DetectYAMLIndent(rawData)
+			}
+
+			if comments, parseErr := parseComments(rawData); parseErr == nil {
+				for k, v := range comments {
+					mergedComments[k] = v
+				}
+			}
+
+			// Parse yaml.Node tree for comment-preserving serialization.
+			// Only the last file's tree is kept — inline/subtree comments from earlier files
+			// are lost for keys not redefined in later files. Head comments are preserved
+			// separately via mergedComments. This is acceptable because the last file
+			// represents the user's most recent intent.
+			var doc yaml.Node
+			if parseErr := yaml.Unmarshal(rawData, &doc); parseErr == nil && len(doc.Content) > 0 {
+				lastNodeTree = doc.Content[0]
 			}
 		}
 	}
@@ -206,6 +232,9 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 	vf := flattenValues("merged", merged)
 	vf.RawValues = merged
 	vf.Indent = indent
+	vf.NodeTree = lastNodeTree
+
+	attachComments(vf, mergedComments)
 
 	return vf, nil
 }
@@ -292,7 +321,7 @@ func toFlatDTO(vf *domain.ValuesFile) *FlatValues {
 		}
 	}
 
-	return &FlatValues{Entries: entries, RawValues: vf.RawValues, Indent: vf.Indent}
+	return &FlatValues{Entries: entries, RawValues: vf.RawValues, Indent: vf.Indent, NodeTree: vf.NodeTree}
 }
 
 // flattenValues converts a nested map[string]any to a sorted flat list.
