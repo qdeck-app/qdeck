@@ -139,11 +139,12 @@ func (c *CustomColumnState) Reset() {
 // ValuesPageState holds all widget state for the values viewer page.
 type ValuesPageState struct {
 	// Data
-	DefaultValues *service.FlatValues
-	ChartPath     string
-	ChartName     string
-	RepoName      string
-	Loading       bool
+	DefaultValues       *service.FlatValues
+	DefaultValueEditors []widget.Editor
+	ChartPath           string
+	ChartName           string
+	RepoName            string
+	Loading             bool
 
 	// Multi-column override state
 	Columns     [MaxCustomColumns]CustomColumnState
@@ -207,6 +208,17 @@ func (s *ValuesPageState) EnsureColumnEditors(colIdx, count int) {
 	}
 
 	s.Columns[colIdx].EnsureEditors(count)
+}
+
+// EnsureDefaultEditors grows the default value editor slice only when data exceeds capacity.
+func (s *ValuesPageState) EnsureDefaultEditors(count int) {
+	if len(s.DefaultValueEditors) >= count {
+		return
+	}
+
+	editors := make([]widget.Editor, count)
+	copy(editors, s.DefaultValueEditors)
+	s.DefaultValueEditors = editors
 }
 
 // CanAddColumn returns true if another custom column can be added.

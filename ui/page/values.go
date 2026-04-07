@@ -81,6 +81,7 @@ type ValuesPageCallbacks struct {
 	OnRemoveRecentValues    func(idx int)
 	OnRenderDefaults        func()
 	OnRenderOverrides       func()
+	OnKeyCopied             func(key string)
 }
 
 // ValuesPage renders the unified override editor: default values on the left,
@@ -161,11 +162,14 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	entryCount := len(p.State.DefaultValues.Entries)
 
 	// Ensure editors are allocated for all active columns.
+	p.State.EnsureDefaultEditors(entryCount)
+
 	for c := range p.State.ColumnCount {
 		p.State.EnsureColumnEditors(c, entryCount)
 	}
 
 	// Wire the table editors from column state.
+	p.Table.DefaultValueEditors = p.State.DefaultValueEditors
 	p.Table.ColumnCount = p.State.ColumnCount
 
 	for c := range p.State.ColumnCount {
@@ -174,6 +178,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	}
 
 	p.Table.OnChanged = p.OnColumnOverrideChanged
+	p.Table.OnKeyCopied = p.OnKeyCopied
 	p.Table.OnCellFocused = func(row, col int) {
 		p.State.FocusedRow = row
 		p.State.FocusedCol = col
