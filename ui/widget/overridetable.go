@@ -2,10 +2,12 @@ package widget
 
 import (
 	"image"
+	"io"
 	"strings"
 	"unicode/utf8"
 
 	"gioui.org/gesture"
+	"gioui.org/io/clipboard"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -13,7 +15,6 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
-	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
@@ -57,6 +58,10 @@ type OverrideTable struct {
 	Theme *material.Theme
 	List  *widget.List
 
+	// DefaultValueEditors holds read-only editors for default value cells,
+	// enabling text selection and copy. Set by the page before Layout each frame.
+	DefaultValueEditors []widget.Editor
+
 	// ColumnEditors holds editor slices for each active column.
 	// Set by the page before Layout each frame (slice header copies, no alloc).
 	ColumnEditors [state.MaxCustomColumns][]widget.Editor
@@ -95,6 +100,9 @@ type OverrideTable struct {
 	// OnCellFocused fires when a cell is clicked/focused.
 	// The callback receives the visible row index and column index.
 	OnCellFocused func(row, col int)
+
+	// OnKeyCopied fires when a key path is copied to the clipboard via left-cell click.
+	OnKeyCopied func(key string)
 }
 
 func (t *OverrideTable) ensureHovers(count int) {
@@ -301,11 +309,14 @@ func (t *OverrideTable) layoutRow(
 										})
 									}),
 									layout.Flexed(overrideValueProportion, func(gtx layout.Context) layout.Dimensions {
-										lbl := material.Body2(t.Theme, entry.Value)
-										lbl.MaxLines = 1
-										lbl.Alignment = text.End
+										if entryIdx >= len(t.DefaultValueEditors) {
+											return layout.Dimensions{}
+										}
 
-										return lbl.Layout(gtx)
+										ed := material.Editor(t.Theme, &t.DefaultValueEditors[entryIdx], "")
+										ed.TextSize = viewerEditorTextSize
+
+										return ed.Layout(gtx)
 									}),
 								)
 							})
@@ -342,7 +353,7 @@ func (t *OverrideTable) layoutRow(
 	t.cellClicks[index].Add(gtx.Ops)
 
 	if !section {
-		t.handleCellClick(gtx, index, entryIdx, g, rightW, dims.Size.Y)
+		t.handleCellClick(gtx, index, entryIdx, entry.Key, g, rightW, dims.Size.Y)
 	}
 
 	// Override highlight or hover background.
@@ -504,11 +515,13 @@ func (t *OverrideTable) processEditorChanges(
 	}
 }
 
-// handleCellClick focuses the correct column editor when a right-cell click occurs.
+// handleCellClick focuses the correct column editor when a right-cell click occurs,
+// or copies the field key to clipboard when the left key area is clicked.
 func (t *OverrideTable) handleCellClick(
 	gtx layout.Context,
 	index int,
 	entryIdx int,
+	entryKey string,
 	g colGeometry,
 	rightW int,
 	rowH int,
@@ -525,6 +538,16 @@ func (t *OverrideTable) handleCellClick(
 
 		clickX := ev.Position.X
 		if clickX < g.rightStart {
+			// Left-side click: copy the full key path to clipboard.
+			gtx.Execute(clipboard.WriteCmd{
+				Type: "text/plain",
+				Data: io.NopCloser(strings.NewReader(entryKey)),
+			})
+
+			if t.OnKeyCopied != nil {
+				t.OnKeyCopied(entryKey)
+			}
+
 			continue
 		}
 
@@ -548,6 +571,12 @@ func (t *OverrideTable) handleCellClick(
 			}
 		}
 	}
+
+	// Show pointer cursor over the left key area (click-to-copy).
+	keyW := g.leftW / 2 //nolint:mnd // key column is half of the left panel
+	keyArea := clip.Rect{Max: image.Pt(keyW, rowH)}.Push(gtx.Ops)
+	pointer.CursorPointer.Add(gtx.Ops)
+	keyArea.Pop()
 
 	// Show text cursor over the right cell area.
 	rightArea := clip.Rect{

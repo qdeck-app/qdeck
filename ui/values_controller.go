@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gioui.org/app"
+	"gioui.org/text"
 	"gioui.org/x/explorer"
 	"gopkg.in/yaml.v3"
 
@@ -139,6 +140,7 @@ func (vc *ValuesController) Callbacks() page.ValuesPageCallbacks {
 		OnRemoveRecentValues:    vc.onRemoveRecentValues,
 		OnRenderDefaults:        vc.onRenderDefaults,
 		OnRenderOverrides:       vc.onRenderOverrides,
+		OnKeyCopied:             vc.onKeyCopied,
 	}
 }
 
@@ -167,6 +169,17 @@ func (vc *ValuesController) pollDefaultValues() {
 			entryCount := len(res.Value.Entries)
 			for i := range vc.State.Columns {
 				vc.State.Columns[i].EnsureEditors(entryCount)
+			}
+
+			// Pre-allocate read-only editors for default value selection/copy.
+			vc.State.EnsureDefaultEditors(entryCount)
+
+			for i, entry := range res.Value.Entries {
+				ed := &vc.State.DefaultValueEditors[i]
+				ed.ReadOnly = true
+				ed.SingleLine = true
+				ed.Alignment = text.End
+				ed.SetText(entry.Value)
 			}
 		}
 	}
@@ -341,6 +354,11 @@ func (vc *ValuesController) ResetState() {
 	vc.lastRenderMode = renderNone
 	vc.State.Loading = true
 	vc.State.DefaultValues = nil
+
+	for i := range vc.State.DefaultValueEditors {
+		vc.State.DefaultValueEditors[i].SetText("")
+	}
+
 	vc.NotifState.Clear()
 	vc.State.ColumnCount = 1
 	vc.State.RecentDropdownOpen = false
@@ -460,6 +478,10 @@ func (vc *ValuesController) onRemoveRecentValues(idx int) {
 
 		return vc.RecentService.ListRecentValues(ctx)
 	})
+}
+
+func (vc *ValuesController) onKeyCopied(key string) {
+	vc.NotifState.Show("Copied: "+key, state.NotificationSuccess, time.Now())
 }
 
 func (vc *ValuesController) onColumnOverrideChanged(colIdx int, yamlText string, err error) {
