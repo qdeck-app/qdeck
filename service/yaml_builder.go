@@ -326,6 +326,108 @@ func SerializeValue(val any) string {
 	}
 }
 
+// SerializeNodeSubtree finds a yaml.Node subtree by dot-separated key path
+// and marshals it, preserving YAML comments. Returns empty string and false
+// if the node tree is nil or the key path is not found.
+func SerializeNodeSubtree(nodeTree *yaml.Node, keyPath string, indent int) (string, bool) {
+	if nodeTree == nil {
+		return "", false
+	}
+
+	node := findNodeSubtree(nodeTree, keyPath)
+	if node == nil {
+		return "", false
+	}
+
+	var buf bytes.Buffer
+
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(indent)
+
+	if err := enc.Encode(node); err != nil {
+		return "", false
+	}
+
+	if err := enc.Close(); err != nil {
+		return "", false
+	}
+
+	return strings.TrimRight(buf.String(), "\n"), true
+}
+
+// findNodeSubtree walks a yaml.Node tree to find the value node at a dot-separated key path.
+// Supports array index segments like "servers[0].host" by navigating into SequenceNode children.
+func findNodeSubtree(root *yaml.Node, keyPath string) *yaml.Node {
+	segments := strings.Split(keyPath, ".")
+	current := root
+
+	for _, seg := range segments {
+		// Handle array index segments like "items[0]" or bare "[0]".
+		mapKey, idx, hasIndex := parseArraySegment(seg)
+
+		if mapKey != "" {
+			current = findMappingChild(current, mapKey)
+			if current == nil {
+				return nil
+			}
+		}
+
+		if hasIndex {
+			if current.Kind != yaml.SequenceNode || idx < 0 || idx >= len(current.Content) {
+				return nil
+			}
+
+			current = current.Content[idx]
+		} else if mapKey == "" {
+			// Plain key segment — navigate into mapping.
+			current = findMappingChild(current, seg)
+			if current == nil {
+				return nil
+			}
+		}
+	}
+
+	return current
+}
+
+// findMappingChild returns the value node for a key in a MappingNode, or nil.
+func findMappingChild(node *yaml.Node, key string) *yaml.Node {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+
+	return nil
+}
+
+// parseArraySegment splits "key[0]" into ("key", 0, true) or "[0]" into ("", 0, true).
+// For plain keys like "host" it returns ("host", 0, false).
+func parseArraySegment(seg string) (string, int, bool) {
+	bracketIdx := strings.IndexByte(seg, '[')
+	if bracketIdx < 0 {
+		return seg, 0, false
+	}
+
+	closeIdx := strings.IndexByte(seg[bracketIdx:], ']')
+	if closeIdx < 0 {
+		return seg, 0, false
+	}
+
+	idxStr := seg[bracketIdx+1 : bracketIdx+closeIdx]
+
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil {
+		return seg, 0, false
+	}
+
+	return seg[:bracketIdx], idx, true
+}
+
 // convertValue converts a string value to the appropriate Go type for YAML marshaling.
 func convertValue(value, typ string) any {
 	switch typ {

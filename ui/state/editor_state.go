@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"strings"
 
 	"gioui.org/widget"
 
@@ -28,6 +29,7 @@ func OverridesToYAML(entries []service.FlatValueEntry, editors []widget.Editor, 
 }
 
 // collectOverrides gathers non-empty, non-section editor values into OverrideEntry slice.
+// Leading YAML comment lines (# ...) in editors are stripped before extracting values.
 func collectOverrides(entries []service.FlatValueEntry, editors []widget.Editor) []service.OverrideEntry {
 	count := 0
 
@@ -36,7 +38,7 @@ func collectOverrides(entries []service.FlatValueEntry, editors []widget.Editor)
 			break
 		}
 
-		if editors[i].Text() != "" && !entries[i].IsSection() {
+		if StripYAMLComments(editors[i].Text()) != "" && !entries[i].IsSection() {
 			count++
 		}
 	}
@@ -52,7 +54,7 @@ func collectOverrides(entries []service.FlatValueEntry, editors []widget.Editor)
 			break
 		}
 
-		val := editors[i].Text()
+		val := StripYAMLComments(editors[i].Text())
 		if val == "" || entry.IsSection() {
 			continue
 		}
@@ -65,4 +67,33 @@ func collectOverrides(entries []service.FlatValueEntry, editors []widget.Editor)
 	}
 
 	return result
+}
+
+// StripYAMLComments removes leading lines starting with # from editor text,
+// returning only the value portion. If the text contains only comment lines,
+// an empty string is returned.
+func StripYAMLComments(text string) string {
+	if !strings.Contains(text, "#") {
+		return text
+	}
+
+	lines := strings.Split(text, "\n")
+	start := 0
+
+	for start < len(lines) {
+		trimmed := strings.TrimSpace(lines[start])
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			start++
+
+			continue
+		}
+
+		break
+	}
+
+	if start == 0 {
+		return text
+	}
+
+	return strings.Join(lines[start:], "\n")
 }

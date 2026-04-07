@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"gioui.org/app"
 	"gioui.org/x/explorer"
+	"gopkg.in/yaml.v3"
 
 	"github.com/qdeck-app/qdeck/config"
 	"github.com/qdeck-app/qdeck/domain"
@@ -605,11 +607,62 @@ func (vc *ValuesController) onSaveCurrentChart() {
 	})
 }
 
-// resolveCustomValue finds a value for key in the flat customMap first,
-// then falls back to the raw nested map.
-func resolveCustomValue(customMap map[string]string, rawValues map[string]any, key string) (string, bool) {
+func (vc *ValuesController) populateColumnOverrides(colIdx int) {
+	col := &vc.State.Columns[colIdx]
+
+	if vc.State.DefaultValues == nil || col.CustomValues == nil {
+		return
+	}
+
+	// Build lookup from custom values (flat key match).
+	customMap := make(map[string]string, len(col.CustomValues.Entries))
+	commentMap := make(map[string]string, len(col.CustomValues.Entries))
+
+	for _, e := range col.CustomValues.Entries {
+		if e.Value != "" {
+			customMap[e.Key] = e.Value
+		}
+
+		if e.Comment != "" {
+			commentMap[e.Key] = e.Comment
+		}
+	}
+
+	col.EnsureEditors(len(vc.State.DefaultValues.Entries))
+
+	rawValues := col.CustomValues.RawValues
+	nodeTree := col.CustomValues.NodeTree
+	indent := col.YAMLIndent()
+
+	populated := 0
+
+	for i, entry := range vc.State.DefaultValues.Entries {
+		if val, ok := resolveCustomValueWithComments(customMap, commentMap, rawValues, nodeTree, entry.Key, indent); ok {
+			col.OverrideEditors[i].SetText(val)
+
+			populated++
+		}
+	}
+
+	col.RebuildOverrideFlags()
+	col.SuppressModifiedCount = populated
+	col.ValuesModified = false
+}
+
+// resolveCustomValueWithComments resolves a custom value for editor display, preserving YAML comments.
+// For scalar values found in customMap, it prepends any associated comment from commentMap.
+// For map/list values, it tries yaml.Node-based serialization first (preserving inline comments),
+// then falls back to plain SerializeValue.
+func resolveCustomValueWithComments(
+	customMap, commentMap map[string]string,
+	rawValues map[string]any,
+	nodeTree *yaml.Node,
+	key string,
+	indent int,
+) (string, bool) {
+	// Scalar value with direct flat key match.
 	if val, ok := customMap[key]; ok {
-		return val, true
+		return formatCommentForEditor(commentMap[key], val), true
 	}
 
 	if rawValues == nil {
@@ -621,41 +674,35 @@ func resolveCustomValue(customMap map[string]string, rawValues map[string]any, k
 		return "", false
 	}
 
-	return service.SerializeValue(rawVal), true
+	// Try yaml.Node serialization first to preserve comments.
+	if nodeVal, ok := service.SerializeNodeSubtree(nodeTree, key, indent); ok {
+		return nodeVal, true
+	}
+
+	// Fall back to plain serialization (no comments).
+	return formatCommentForEditor(commentMap[key], service.SerializeValue(rawVal)), true
 }
 
-func (vc *ValuesController) populateColumnOverrides(colIdx int) {
-	col := &vc.State.Columns[colIdx]
-
-	if vc.State.DefaultValues == nil || col.CustomValues == nil {
-		return
+// formatCommentForEditor prepends YAML comment lines before the value.
+// Each comment line is prefixed with "# ". Returns just the value if comment is empty.
+func formatCommentForEditor(comment, value string) string {
+	if comment == "" {
+		return value
 	}
 
-	// Build lookup from custom values (flat key match).
-	customMap := make(map[string]string, len(col.CustomValues.Entries))
-	for _, e := range col.CustomValues.Entries {
-		if e.Value != "" {
-			customMap[e.Key] = e.Value
-		}
+	var b strings.Builder
+
+	lines := strings.Split(comment, "\n")
+
+	for _, line := range lines {
+		b.WriteString("# ")
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
 
-	col.EnsureEditors(len(vc.State.DefaultValues.Entries))
+	b.WriteString(value)
 
-	rawValues := col.CustomValues.RawValues
-
-	populated := 0
-
-	for i, entry := range vc.State.DefaultValues.Entries {
-		if val, ok := resolveCustomValue(customMap, rawValues, entry.Key); ok {
-			col.OverrideEditors[i].SetText(val)
-
-			populated++
-		}
-	}
-
-	col.RebuildOverrideFlags()
-	col.SuppressModifiedCount = populated
-	col.ValuesModified = false
+	return b.String()
 }
 
 // reRenderIfViewerOpen re-triggers the last render when a viewer window is open.

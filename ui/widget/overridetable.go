@@ -488,7 +488,7 @@ func (t *OverrideTable) processEditorChanges(
 			}
 
 			if t.ColumnStates[c] != nil {
-				t.ColumnStates[c].MarkOverride(entryIdx, editors[entryIdx].Text() != "")
+				t.ColumnStates[c].MarkOverride(entryIdx, state.StripYAMLComments(editors[entryIdx].Text()) != "")
 			}
 
 			if t.OnChanged != nil {
