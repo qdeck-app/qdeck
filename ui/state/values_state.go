@@ -39,10 +39,9 @@ type CustomColumnState struct {
 
 	// Modification tracking
 	ValuesModified bool
-	// SuppressModifiedCount tracks how many editor change events to ignore
-	// after a file load. Loading a file populates editors which triggers change
-	// callbacks; this counter prevents those from marking the column as modified.
-	SuppressModifiedCount int
+	// DrainPendingChanges is set after a file load to signal that Layout should
+	// eagerly consume all pending SetText ChangeEvents before user interaction.
+	DrainPendingChanges bool
 
 	// Widget state
 	PickFileButton     widget.Clickable
@@ -124,13 +123,14 @@ func (c *CustomColumnState) Reset() {
 	c.CustomFilePaths = c.CustomFilePaths[:0]
 	c.MergedFileCount = 0
 	c.ValuesModified = false
-	c.SuppressModifiedCount = 0
 	c.FileDropActive = false
 	c.EditorParseError = ""
 
 	for i := range c.OverrideEditors {
 		c.OverrideEditors[i].SetText("")
 	}
+
+	c.DrainPendingChanges = len(c.OverrideEditors) > 0
 
 	clear(c.overrideFlags)
 	c.overrideCount = 0

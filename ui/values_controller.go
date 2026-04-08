@@ -491,11 +491,7 @@ func (vc *ValuesController) onColumnOverrideChanged(colIdx int, yamlText string,
 
 	col := &vc.State.Columns[colIdx]
 
-	if col.SuppressModifiedCount > 0 {
-		col.SuppressModifiedCount--
-	} else {
-		col.ValuesModified = true
-	}
+	col.ValuesModified = true
 
 	if err != nil {
 		col.EditorParseError = err.Error()
@@ -667,7 +663,7 @@ func (vc *ValuesController) populateColumnOverrides(colIdx int) {
 	}
 
 	col.RebuildOverrideFlags()
-	col.SuppressModifiedCount = populated
+	col.DrainPendingChanges = true
 	col.ValuesModified = false
 }
 
