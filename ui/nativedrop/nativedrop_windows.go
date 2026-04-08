@@ -299,6 +299,12 @@ func revokeDragDrop(hwnd uintptr) {
 }
 
 // ListenEvents captures the Win32ViewEvent and registers the IDropTarget.
+//
+// OLE initialization and RegisterDragDrop run on the driver thread (via
+// window.Run) so the COM STA lives on the thread with the Win32 message
+// pump.  Without this, COM dispatches IDropTarget callbacks to the client
+// goroutine's thread, which has no message pump, freezing the source
+// application during drag-and-drop.
 func (t *Target) ListenEvents(evt event.Event) {
 	e, ok := evt.(app.Win32ViewEvent)
 	if !ok {
@@ -308,8 +314,14 @@ func (t *Target) ListenEvents(evt event.Event) {
 	if e.HWND != 0 && !t.platform.registered {
 		t.platform.hwnd = e.HWND
 
-		ret, _, _ := procOleInitialize.Call(0)
-		if ret == sOK || ret == sFalse {
+		t.window.Run(func() {
+			ret, _, _ := procOleInitialize.Call(0)
+			if ret != sOK && ret != sFalse {
+				slog.Warn("OleInitialize failed, drag-and-drop unavailable", "hresult", ret)
+
+				return
+			}
+
 			t.platform.oleInitialized = true
 
 			r2, _, _ := procRegisterDragDrop.Call(e.HWND, uintptr(unsafe.Pointer(t.platform.dt))) //nolint:gosec // COM requires passing struct pointer.
@@ -321,29 +333,32 @@ func (t *Target) ListenEvents(evt event.Event) {
 
 			t.platform.registered = true
 			t.DropSupported = true
-		} else {
-			slog.Warn("OleInitialize failed, drag-and-drop unavailable", "hresult", ret)
-		}
+		})
 	} else if e.HWND == 0 && t.platform.registered {
-		revokeDragDrop(t.platform.hwnd)
-		t.platform.registered = false
-		t.DropSupported = false
+		t.window.Run(func() {
+			revokeDragDrop(t.platform.hwnd)
+			t.platform.registered = false
+			t.DropSupported = false
+		})
 	}
 }
 
 // Close revokes the COM drag-drop registration. Safe to call if ListenEvents
-// already handled HWND=0 (the operation is idempotent).
+// already handled HWND=0 (the operation is idempotent).  Runs on the driver
+// thread to match the STA that owns the registration.
 func (t *Target) Close() {
-	if t.platform.registered {
-		revokeDragDrop(t.platform.hwnd)
-		t.platform.registered = false
-	}
+	t.window.Run(func() {
+		if t.platform.registered {
+			revokeDragDrop(t.platform.hwnd)
+			t.platform.registered = false
+		}
 
-	if t.platform.oleInitialized {
-		// OleUninitialize is void in C; the syscall return carries no status.
-		ret, _, _ := procOleUninitialize.Call()
-		_ = ret
+		if t.platform.oleInitialized {
+			// OleUninitialize is void in C; the syscall return carries no status.
+			ret, _, _ := procOleUninitialize.Call()
+			_ = ret
 
-		t.platform.oleInitialized = false
-	}
+			t.platform.oleInitialized = false
+		}
+	})
 }
