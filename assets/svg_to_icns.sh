@@ -31,23 +31,23 @@ for size in "${SIZES[@]}"; do
         out="$ICONSET_DIR/icon_${size}x${size}.png"
     fi
 
-    rsvg-convert -w "$size" -h "$size" -a -b none "$SVG" -o "$out"
+    rsvg-convert -w "$size" -h "$size" -a -b white "$SVG" -o "$out"
 
     # Generate @2x variants where needed
     case "$size" in
         16)
             retina_size=$(( size * 2 ))
-            rsvg-convert -w "$retina_size" -h "$retina_size" -a -b none "$SVG" \
+            rsvg-convert -w "$retina_size" -h "$retina_size" -a -b white "$SVG" \
                 -o "$ICONSET_DIR/icon_16x16@2x.png"
             ;;
         128)
             retina_size=$(( size * 2 ))
-            rsvg-convert -w "$retina_size" -h "$retina_size" -a -b none "$SVG" \
+            rsvg-convert -w "$retina_size" -h "$retina_size" -a -b white "$SVG" \
                 -o "$ICONSET_DIR/icon_128x128@2x.png"
             ;;
         256)
             retina_size=$(( size * 2 ))
-            rsvg-convert -w "$retina_size" -h "$retina_size" -a -b none "$SVG" \
+            rsvg-convert -w "$retina_size" -h "$retina_size" -a -b white "$SVG" \
                 -o "$ICONSET_DIR/icon_256x256@2x.png"
             ;;
     esac
