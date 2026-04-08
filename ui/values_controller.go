@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -130,6 +131,7 @@ func (vc *ValuesController) Callbacks() page.ValuesPageCallbacks {
 		OnColumnFilesSelected:   vc.OnColumnFilesSelected,
 		OnOpenColumnFile:        vc.onOpenColumnFile,
 		OnRevealFile:            vc.onRevealColumnFile,
+		OnOpenInEditor:          vc.onOpenInEditor,
 		OnSaveChart:             vc.onSaveCurrentChart,
 		OnColumnOverrideChanged: vc.onColumnOverrideChanged,
 		OnSaveColumnValues:      vc.onSaveColumnValues,
@@ -462,6 +464,24 @@ func (vc *ValuesController) onRevealColumnFile(colIdx int) {
 	col := &vc.State.Columns[colIdx]
 	if len(col.CustomFilePaths) > 0 {
 		revealer.RevealFile(col.CustomFilePaths[0])
+	}
+}
+
+func (vc *ValuesController) onOpenInEditor(colIdx int) {
+	if colIdx < 0 || colIdx >= state.MaxCustomColumns {
+		return
+	}
+
+	col := &vc.State.Columns[colIdx]
+	if len(col.CustomFilePaths) == 0 {
+		return
+	}
+
+	filePath := col.CustomFilePaths[0]
+
+	cmd := exec.CommandContext(context.Background(), "code", filePath) //nolint:gosec // user-selected file path, not untrusted input
+	if err := cmd.Start(); err != nil {
+		slog.Error("failed to open file in VS Code", "path", col.CustomFilePaths[0], "error", err)
 	}
 }
 

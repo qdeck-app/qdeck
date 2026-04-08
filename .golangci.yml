@@ -173,4 +173,9 @@ linters:
         - HACK # marks hack-around that should be removed before merging
         - BUG
         - FIXME
-
+  exclusions:
+    rules:
+      # SVG path coordinates are inherently numeric literals with no meaningful constant names.
+      - path: ui/widget/vscodeicon\.go
+        linters:
+          - mnd

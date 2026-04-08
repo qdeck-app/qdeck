@@ -259,6 +259,34 @@ func layoutClickablePointer(gtx layout.Context, click *widget.Clickable, w layou
 	return dims
 }
 
+// layoutIconButton renders an icon widget inside a clickable area whose hover zone
+func layoutIconButton(
+	gtx layout.Context, th *material.Theme, click *widget.Clickable, icon layout.Widget,
+) layout.Dimensions {
+	hovered := click.Hovered()
+
+	m := op.Record(gtx.Ops)
+	dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Inset{
+			Left: textBtnPaddingH, Right: textBtnPaddingH,
+			Top: textBtnPaddingV, Bottom: textBtnPaddingV,
+		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			gtx.Constraints.Min.Y = gtx.Sp(material.Body2(th, "X").TextSize)
+
+			return layout.Center.Layout(gtx, icon)
+		})
+	})
+	c := m.Stop()
+
+	paintHoverBg(gtx, dims, hovered)
+
+	c.Add(gtx.Ops)
+
+	pushPointerCursor(gtx, dims, click)
+
+	return dims
+}
+
 func layoutHorizontalSeparator(gtx layout.Context, left, right unit.Dp) layout.Dimensions {
 	return layout.Inset{Left: left, Right: right}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		h := gtx.Dp(separatorHeight)

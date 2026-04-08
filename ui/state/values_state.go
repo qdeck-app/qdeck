@@ -49,6 +49,7 @@ type CustomColumnState struct {
 	CloseButton        widget.Clickable
 	RemoveColumnButton widget.Clickable
 	FileNameButton     widget.Clickable
+	OpenInEditorButton widget.Clickable
 	FileDropActive     bool
 
 	// Editor parse error (shown when override YAML is invalid)
