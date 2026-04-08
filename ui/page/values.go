@@ -43,6 +43,7 @@ const (
 	renderDefaultsLabelBase          = "Render with default values" //nolint:goconst // render label base
 	renderOverridesLabelBase         = "Render with all overrides"  //nolint:goconst // render label base
 	renderPlayIconSize       unit.Dp = 10
+	editorIconSize           unit.Dp = 12
 	renderIconSpacing        unit.Dp = 4
 	renderBtnPaddingH        unit.Dp = 10
 	renderBtnPaddingV        unit.Dp = 10
@@ -71,6 +72,7 @@ type ValuesPageCallbacks struct {
 	OnColumnFilesSelected   func(colIdx int, paths []string)
 	OnOpenColumnFile        func(colIdx int)
 	OnRevealFile            func(colIdx int)
+	OnOpenInEditor          func(colIdx int)
 	OnSaveChart             func()
 	OnColumnOverrideChanged func(colIdx int, yamlText string, err error)
 	OnSaveColumnValues      func(colIdx int)
@@ -649,7 +651,12 @@ func (p *ValuesPage) layoutColumnFileStatus(gtx layout.Context, colIdx int) layo
 		p.OnRevealFile(idx)
 	}
 
-	const maxChildren = 3
+	// Handle open-in-editor click.
+	if col.OpenInEditorButton.Clicked(gtx) && hasFile && p.OnOpenInEditor != nil {
+		p.OnOpenInEditor(idx)
+	}
+
+	const maxChildren = 4
 
 	var (
 		children [maxChildren]layout.FlexChild
@@ -678,6 +685,25 @@ func (p *ValuesPage) layoutColumnFileStatus(gtx layout.Context, colIdx int) layo
 			})
 	})
 	n++
+
+	// Open in VS Code button (only when a file is loaded).
+	if hasFile {
+		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: valuesPaddingSmall}.Layout(gtx,
+				func(gtx layout.Context) layout.Dimensions {
+					iconColor := theme.ColorAccent
+					if col.OpenInEditorButton.Hovered() {
+						iconColor = theme.ColorAccentHover
+					}
+
+					return layoutIconButton(gtx, p.Theme, &col.OpenInEditorButton,
+						func(gtx layout.Context) layout.Dimensions {
+							return customwidget.LayoutVSCodeIcon(gtx, editorIconSize, iconColor)
+						})
+				})
+		})
+		n++
+	}
 
 	// Close button right next to filename: always clears the file/overrides.
 	children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
