@@ -177,6 +177,27 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		p.Table.ColumnStates[c] = &p.State.Columns[c]
 	}
 
+	// Drain pending SetText ChangeEvents from file loads before wiring OnChanged,
+	// so drained events don't trigger onColumnOverrideChanged.
+	for c := range p.State.ColumnCount {
+		col := &p.State.Columns[c]
+		if !col.DrainPendingChanges {
+			continue
+		}
+
+		for i := range col.OverrideEditors {
+			for {
+				_, ok := col.OverrideEditors[i].Update(gtx)
+				if !ok {
+					break
+				}
+			}
+		}
+
+		col.DrainPendingChanges = false
+		col.ValuesModified = false
+	}
+
 	p.Table.OnChanged = p.OnColumnOverrideChanged
 	p.Table.OnKeyCopied = p.OnKeyCopied
 	p.Table.OnCellFocused = func(row, col int) {
