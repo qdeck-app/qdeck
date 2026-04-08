@@ -27,7 +27,9 @@ jobs:
         run: make install_deps
 
       - name: Install WiX Toolset
-        run: dotnet tool install --global wix
+        run: |
+          dotnet tool install --global wix
+          wix eula --accept
 
       - name: Build windows
         run: make build_windows TAG_NAME=${{ github.ref_name }}
