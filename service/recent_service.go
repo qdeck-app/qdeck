@@ -208,6 +208,86 @@ func (s *RecentService) SaveShowComments(ctx context.Context, show bool) error {
 	return nil
 }
 
+const maxRecentValuesEntries = 10
+
+// ListRecentValuesEntries returns all recent values+chart pairs.
+//
+//nolint:dupl // Structurally similar to ListRecentCharts but operates on different slice.
+func (s *RecentService) ListRecentValuesEntries(ctx context.Context) ([]domain.RecentValuesEntry, error) {
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("list recent values entries: %w", ctx.Err())
+	}
+
+	data, err := s.store.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load recent values entries: %w", err)
+	}
+
+	return data.RecentValuesEntries, nil
+}
+
+// AddRecentValuesEntry adds a values+chart pair, deduplicating and enforcing max limit.
+func (s *RecentService) AddRecentValuesEntry(ctx context.Context, entry domain.RecentValuesEntry) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("add recent values entry: %w", ctx.Err())
+	}
+
+	if entry.ValuesPath == "" {
+		return errors.New("add recent values entry: valuesPath required")
+	}
+
+	if err := s.store.Update(ctx, func(data *storage.AppData) error {
+		entry.OpenedAt = time.Now()
+
+		data.RecentValuesEntries = slices.DeleteFunc(data.RecentValuesEntries, func(existing domain.RecentValuesEntry) bool {
+			return matchesValuesEntry(existing, entry)
+		})
+
+		data.RecentValuesEntries = slices.Insert(data.RecentValuesEntries, 0, entry)
+
+		if len(data.RecentValuesEntries) > maxRecentValuesEntries {
+			data.RecentValuesEntries = data.RecentValuesEntries[:maxRecentValuesEntries]
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("add recent values entry: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveRecentValuesEntry removes a values entry at the given index.
+//
+//nolint:dupl // Structurally similar to RemoveRecentChart but operates on different slice.
+func (s *RecentService) RemoveRecentValuesEntry(ctx context.Context, idx int) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("remove recent values entry: %w", ctx.Err())
+	}
+
+	if err := s.store.Update(ctx, func(data *storage.AppData) error {
+		if idx < 0 || idx >= len(data.RecentValuesEntries) {
+			return fmt.Errorf("remove recent values entry: index %d out of range [0, %d)", idx, len(data.RecentValuesEntries))
+		}
+
+		data.RecentValuesEntries = slices.Delete(data.RecentValuesEntries, idx, idx+1)
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("remove recent values entry: %w", err)
+	}
+
+	return nil
+}
+
+func matchesValuesEntry(a, b domain.RecentValuesEntry) bool {
+	if a.ValuesPath != b.ValuesPath {
+		return false
+	}
+
+	return matchesChart(a.ChartRef(), b.ChartRef())
+}
+
 func matchesChart(a, b domain.RecentChart) bool {
 	if a.IsLocal() && b.IsLocal() {
 		return a.LocalPath == b.LocalPath

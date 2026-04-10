@@ -53,7 +53,7 @@ func (t *Target) Close() {
 }
 
 //export nativeDropCallback
-func nativeDropCallback(handle C.uintptr_t, paths **C.char, count C.int) {
+func nativeDropCallback(handle C.uintptr_t, paths **C.char, count C.int, dropY C.float) {
 	if count <= 0 {
 		return
 	}
@@ -69,7 +69,7 @@ func nativeDropCallback(handle C.uintptr_t, paths **C.char, count C.int) {
 		goPaths[i] = C.GoString(cSlice[i])
 	}
 
-	t.sendDrop(goPaths)
+	t.sendDrop(goPaths, float32(dropY))
 }
 
 //export nativeDragEntered

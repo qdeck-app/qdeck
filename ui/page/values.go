@@ -826,7 +826,7 @@ func (p *ValuesPage) layoutRecentDropdownCard(gtx layout.Context) layout.Dimensi
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutPanelLabel(gtx, p.Theme, "Recent Values Files", 0, 0, valuesPaddingSmall)
+				return layoutPanelLabel(gtx, p.Theme, "Recent Values Files", 0, valuesPaddingSmall)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,

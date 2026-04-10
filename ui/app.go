@@ -59,13 +59,14 @@ type Application struct {
 	navState state.NavigationState
 
 	// Async runners (repo/chart navigation)
-	repoListRunner     *async.Runner[[]domain.HelmRepository]
-	chartListRunner    *async.Runner[[]domain.Chart]
-	versionListRunner  *async.Runner[[]domain.ChartVersion]
-	pullChartRunner    *async.Runner[string]
-	localChartRunner   *async.Runner[service.LocalChartResult]
-	ociChartRunner     *async.Runner[service.OCIChartResult]
-	recentChartsRunner *async.Runner[[]domain.RecentChart]
+	repoListRunner            *async.Runner[[]domain.HelmRepository]
+	chartListRunner           *async.Runner[[]domain.Chart]
+	versionListRunner         *async.Runner[[]domain.ChartVersion]
+	pullChartRunner           *async.Runner[string]
+	localChartRunner          *async.Runner[service.LocalChartResult]
+	ociChartRunner            *async.Runner[service.OCIChartResult]
+	recentChartsRunner        *async.Runner[[]domain.RecentChart]
+	recentValuesEntriesRunner *async.Runner[[]domain.RecentValuesEntry]
 
 	// Notification
 	notificationState state.NotificationState
@@ -133,27 +134,34 @@ func NewApplication(
 	a.localChartRunner = async.NewRunner[service.LocalChartResult](w, 1)
 	a.ociChartRunner = async.NewRunner[service.OCIChartResult](w, 1)
 	a.recentChartsRunner = async.NewRunner[[]domain.RecentChart](w, 1)
+	a.recentValuesEntriesRunner = async.NewRunner[[]domain.RecentValuesEntry](w, 1)
 
 	a.valuesCtrl = newValuesController(
 		w, &a.navState, &a.valuesState, &a.chartState, &a.notificationState,
 		expl, valuesSvc, templateSvc, recentSvc, chartSvc,
 	)
 	a.valuesCtrl.OnOpenLocalChart = a.onOpenLocalChart
+	a.valuesCtrl.OnPendingValuesFileSelected = a.onValuesFileDropped
+	a.valuesCtrl.OnPendingValuesConsumed = a.onPendingValuesConsumed
 
 	// Wire pages
 	a.reposPage = page.ReposPage{
-		Theme:                 th,
-		State:                 &a.repoState,
-		OnSelectRepo:          a.onSelectRepo,
-		OnAddRepo:             a.onAddRepo,
-		OnRemoveRepo:          a.onRemoveRepo,
-		OnRenameRepo:          a.onRenameRepo,
-		OnUpdateRepo:          a.onUpdateRepo,
-		OnOpenLocalChart:      a.onOpenLocalChart,
-		OnSelectRecentChart:   a.onSelectRecentChart,
-		OnRemoveRecentChart:   a.onRemoveRecentChart,
-		OnOpenChartFilePicker: a.valuesCtrl.OnOpenChartFilePicker,
-		OnDirectLinkSubmit:    a.onDirectLinkSubmit,
+		Theme:                     th,
+		State:                     &a.repoState,
+		OnSelectRepo:              a.onSelectRepo,
+		OnAddRepo:                 a.onAddRepo,
+		OnRemoveRepo:              a.onRemoveRepo,
+		OnRenameRepo:              a.onRenameRepo,
+		OnUpdateRepo:              a.onUpdateRepo,
+		OnOpenLocalChart:          a.onOpenLocalChart,
+		OnSelectRecentChart:       a.onSelectRecentChart,
+		OnRemoveRecentChart:       a.onRemoveRecentChart,
+		OnOpenChartFilePicker:     a.valuesCtrl.OnOpenChartFilePicker,
+		OnDirectLinkSubmit:        a.onDirectLinkSubmit,
+		OnValuesFileDropped:       a.onValuesFileDropped,
+		OnOpenValuesFilePicker:    a.onOpenValuesFilePicker,
+		OnSelectRecentValuesEntry: a.onSelectRecentValuesEntry,
+		OnRemoveRecentValuesEntry: a.onRemoveRecentValuesEntry,
 	}
 	a.chartsPage = page.ChartsPage{
 		Theme:           th,
@@ -168,6 +176,7 @@ func NewApplication(
 
 	a.loadRepos()
 	a.loadRecentCharts()
+	a.loadRecentValuesEntries()
 
 	return a
 }
@@ -225,6 +234,12 @@ func (a *Application) pollExternalEvents() {
 			switch a.navState.CurrentPage {
 			case state.PageValues:
 				a.valuesCtrl.OnColumnFilesSelected(0, ev.Paths)
+			case state.PageRepos:
+				if int(ev.PositionY) >= a.repoState.ValuesSectionMinY && a.repoState.ValuesSectionMinY > 0 {
+					a.onValuesFileDropped(ev.Paths[0])
+				} else {
+					a.onOpenLocalChart(ev.Paths[0])
+				}
 			default:
 				a.onOpenLocalChart(ev.Paths[0])
 			}
@@ -289,6 +304,10 @@ func (a *Application) pollAsyncResults() {
 		a.repoState.RecentCharts = v
 	})
 
+	pollRunner(a.recentValuesEntriesRunner, &a.repoState.Loading, &a.notificationState, func(v []domain.RecentValuesEntry) {
+		a.repoState.RecentValuesEntries = v
+	})
+
 	// Values controller polls its own runners.
 	a.valuesCtrl.PollAsync()
 }
@@ -338,6 +357,8 @@ func (a *Application) layout(gtx layout.Context) layout.Dimensions {
 
 	a.updateBreadcrumb()
 
+	windowH := gtx.Constraints.Max.Y
+
 	return layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -348,6 +369,8 @@ func (a *Application) layout(gtx layout.Context) layout.Dimensions {
 					return a.notificationBar.Layout(gtx, a.theme, &a.notificationState)
 				}),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					a.repoState.PageContentTop = windowH - gtx.Constraints.Max.Y
+
 					switch a.navState.CurrentPage {
 					case state.PageCharts:
 						return a.chartsPage.Layout(gtx)
@@ -454,10 +477,12 @@ func (a *Application) doBreadcrumbClick(segmentIdx int) {
 	case breadcrumbIdxRoot:
 		a.navState.CurrentPage = state.PageRepos
 		a.navState.ClearLocalChart()
+		a.navState.PendingValuesPath = ""
 	case breadcrumbIdxRepo:
 		if a.navState.IsLocalChart {
 			a.navState.CurrentPage = state.PageRepos
 			a.navState.ClearLocalChart()
+			a.navState.PendingValuesPath = ""
 		} else {
 			a.resetToChartList()
 		}
@@ -564,6 +589,8 @@ func (a *Application) navigateBack() {
 func (a *Application) doNavigateBack() {
 	switch a.navState.CurrentPage {
 	case state.PageValues:
+		a.navState.PendingValuesPath = ""
+
 		if a.navState.IsLocalChart {
 			// Local charts have no version page — go straight to repos.
 			a.navState.ClearLocalChart()
@@ -903,14 +930,19 @@ func (a *Application) onOpenLocalChart(path string) {
 }
 
 func (a *Application) onSelectRecentChart(entry domain.RecentChart) {
+	a.openChartByRef(entry)
+}
+
+// openChartByRef routes to the correct chart handler based on chart source type.
+func (a *Application) openChartByRef(ref domain.RecentChart) {
 	switch {
-	case entry.IsLocal():
-		a.onOpenLocalChart(entry.LocalPath)
-	case entry.IsOCI():
-		a.onOpenOCIChart(entry.OciURL + ":" + entry.Version)
+	case ref.IsLocal():
+		a.onOpenLocalChart(ref.LocalPath)
+	case ref.IsOCI():
+		a.onOpenOCIChart(ref.OciURL + ":" + ref.Version)
 	default:
-		a.navState.SelectedRepo = entry.RepoName
-		a.onSelectVersion(entry.ChartName, entry.Version)
+		a.navState.SelectedRepo = ref.RepoName
+		a.onSelectVersion(ref.ChartName, ref.Version)
 	}
 }
 
@@ -925,9 +957,80 @@ func (a *Application) onRemoveRecentChart(idx int) {
 	})
 }
 
+func (a *Application) onValuesFileDropped(path string) {
+	a.navState.PendingValuesPath = path
+	a.notificationState.Show(
+		"Values file queued: "+filepath.Base(path)+". Select a chart to continue.",
+		state.NotificationSuccess,
+		time.Now(),
+	)
+}
+
+func (a *Application) onOpenValuesFilePicker() {
+	a.valuesCtrl.OpenValuesFilePicker()
+}
+
+func (a *Application) onSelectRecentValuesEntry(entry domain.RecentValuesEntry) {
+	a.navState.PendingValuesPath = entry.ValuesPath
+	a.openChartByRef(entry.ChartRef())
+}
+
+//nolint:dupl // Structurally similar to onRemoveRecentChart but operates on different type.
+func (a *Application) onRemoveRecentValuesEntry(idx int) {
+	a.recentValuesEntriesRunner.RunWithTimeout(config.RecentValuesEntriesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesEntry, error) {
+		if err := a.recentService.RemoveRecentValuesEntry(ctx, idx); err != nil {
+			return nil, fmt.Errorf("remove recent values entry: %w", err)
+		}
+
+		return a.recentService.ListRecentValuesEntries(ctx)
+	})
+}
+
+func (a *Application) onPendingValuesConsumed(valuesPath string) {
+	entry := domain.RecentValuesEntry{
+		ValuesPath: valuesPath,
+	}
+
+	switch {
+	case a.navState.IsLocalChart:
+		entry.LocalPath = a.navState.LocalChartPath
+		entry.ChartDisplayName = a.navState.LocalChartName
+	case a.navState.IsOCIChart:
+		entry.OciURL = a.navState.LocalChartPath // OCI charts store the registry URL in LocalChartPath.
+		entry.ChartDisplayName = a.navState.LocalChartName
+		entry.Version = a.navState.SelectedVersion
+	default:
+		entry.RepoName = a.navState.SelectedRepo
+		entry.ChartName = a.navState.SelectedChart
+		entry.Version = a.navState.SelectedVersion
+		entry.ChartDisplayName = a.navState.SelectedChart + ":" + a.navState.SelectedVersion
+	}
+
+	a.addRecentValuesEntry(entry)
+}
+
+func (a *Application) loadRecentValuesEntries() {
+	a.recentValuesEntriesRunner.RunWithTimeout(config.RecentValuesEntriesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesEntry, error) {
+		return a.recentService.ListRecentValuesEntries(ctx)
+	})
+}
+
+//nolint:dupl // Structurally similar to addRecentChart but operates on different type.
+func (a *Application) addRecentValuesEntry(entry domain.RecentValuesEntry) {
+	a.recentValuesEntriesRunner.RunWithTimeout(config.RecentValuesEntriesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesEntry, error) {
+		if err := a.recentService.AddRecentValuesEntry(ctx, entry); err != nil {
+			return nil, fmt.Errorf("add recent values entry: %w", err)
+		}
+
+		return a.recentService.ListRecentValuesEntries(ctx)
+	})
+}
+
 func (a *Application) onBackToRepos() {
 	a.navState.CurrentPage = state.PageRepos
+	a.navState.PendingValuesPath = ""
 	a.loadRepos()
+	a.loadRecentValuesEntries()
 }
 
 func (a *Application) navigateToVersions() {

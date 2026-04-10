@@ -27,6 +27,7 @@ const (
 	// Recent operations
 	RecentChartsLoadOperation
 	RecentValuesLoadOperation
+	RecentValuesEntriesLoadOperation
 
 	// File operations
 	FileExportOperation

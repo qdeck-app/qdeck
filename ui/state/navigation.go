@@ -21,6 +21,10 @@ type NavigationState struct {
 	IsOCIChart     bool
 	LocalChartPath string
 	LocalChartName string
+
+	// PendingValuesPath holds a values file dropped on the repos page.
+	// It is auto-loaded into column 0 when the user navigates to the values page.
+	PendingValuesPath string
 }
 
 // ClearLocalChart resets all local and OCI chart navigation fields.
