@@ -150,6 +150,8 @@ type ValuesPageState struct {
 	ChartPath           string
 	ChartName           string
 	RepoName            string
+	OciRef              string
+	Version             string
 	Loading             bool
 
 	// Multi-column override state
@@ -258,10 +260,14 @@ func (s *ValuesPageState) EnsureRecentValuesClickables(count int) {
 func (s *ValuesPageState) RebuildHelmInstallCmd() {
 	var chartRef, releaseName string
 
-	if s.RepoName != "" {
+	switch {
+	case s.RepoName != "":
 		chartRef = s.RepoName + "/" + s.ChartName
 		releaseName = s.ChartName
-	} else {
+	case s.OciRef != "":
+		chartRef = s.OciRef + " --version " + s.Version
+		releaseName = s.ChartName
+	default:
 		chartRef = s.ChartPath
 		releaseName = filepath.Base(s.ChartPath)
 	}

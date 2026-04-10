@@ -195,6 +195,65 @@ func (s *ChartService) PullChart(ctx context.Context, repoName, chartName, versi
 	return chartDir, nil
 }
 
+// OCIChartResult holds metadata about a chart pulled from an OCI registry.
+type OCIChartResult struct {
+	OciRef    string
+	Name      string
+	Version   string
+	ChartPath string
+}
+
+// PullOCIChart pulls a chart directly from an OCI registry URL.
+// The ociRef should be in the form "oci://registry.example.com/charts/nginx"
+// and version is the tag (e.g. "1.2.0").
+func (s *ChartService) PullOCIChart(ctx context.Context, ociRef, version string) (OCIChartResult, error) {
+	if ctx.Err() != nil {
+		return OCIChartResult{}, fmt.Errorf("pull OCI chart: %w", ctx.Err())
+	}
+
+	// Extract chart name from the last path segment of the OCI reference.
+	chartName := filepath.Base(ociRef)
+
+	// Use a separate "pulled-oci" directory with a sanitized registry path to avoid
+	// collisions with repo-pulled charts and between different OCI registries.
+	registryPath := sanitizeOCIPath(strings.TrimPrefix(ociRef, "oci://"))
+	destDir := filepath.Join(s.settings.RepositoryCache, "pulled-oci", registryPath)
+
+	if err := os.MkdirAll(destDir, pullDirPerm); err != nil {
+		return OCIChartResult{}, fmt.Errorf("create pull dir: %w", err)
+	}
+
+	chartDir := filepath.Join(destDir, chartName)
+
+	if chartVersionMatches(chartDir, version) {
+		return OCIChartResult{OciRef: ociRef, Name: chartName, Version: version, ChartPath: chartDir}, nil
+	}
+
+	if err := os.RemoveAll(chartDir); err != nil {
+		return OCIChartResult{}, fmt.Errorf("clean previous pull: %w", err)
+	}
+
+	pull := action.NewPullWithOpts(action.WithConfig(&action.Configuration{}))
+	pull.Settings = s.settings
+	pull.Version = version
+	pull.Untar = true
+	pull.UntarDir = destDir
+	pull.DestDir = destDir
+
+	output, err := pull.Run(ociRef)
+	if err != nil {
+		return OCIChartResult{}, fmt.Errorf("pull OCI chart %s:%s: %w (output: %s)", ociRef, version, err, output)
+	}
+
+	return OCIChartResult{OciRef: ociRef, Name: chartName, Version: version, ChartPath: chartDir}, nil
+}
+
+// sanitizeOCIPath replaces characters unsafe for filesystem paths (e.g. colons from ports)
+// with underscores so the registry path can be used as a cache directory name.
+func sanitizeOCIPath(path string) string {
+	return strings.ReplaceAll(path, ":", "_")
+}
+
 // LoadLocalChart loads a chart from a local directory or .tgz file.
 func (s *ChartService) LoadLocalChart(ctx context.Context, path string) (LocalChartResult, error) {
 	if ctx.Err() != nil {

@@ -64,6 +64,9 @@ type RepoPageState struct {
 	RecentClicks       []widget.Clickable
 	RecentRemoveClicks []widget.Clickable
 
+	// Direct link input (repo/chart:version)
+	DirectLinkEditor widget.Editor
+
 	// Chart file picker button (inside compact drop zone)
 	ChartPickerButton widget.Clickable
 

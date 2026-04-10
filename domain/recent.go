@@ -12,6 +12,9 @@ type RecentChart struct {
 	ChartName string `json:"chartName,omitempty"`
 	Version   string `json:"version,omitempty"`
 
+	// For OCI registry charts
+	OciURL string `json:"ociUrl,omitempty"`
+
 	// For disk-sourced charts
 	LocalPath string `json:"localPath,omitempty"`
 
@@ -25,13 +28,23 @@ func (r RecentChart) IsLocal() bool {
 	return r.LocalPath != ""
 }
 
+// IsOCI returns true if this chart was opened from an OCI registry.
+func (r RecentChart) IsOCI() bool {
+	return r.OciURL != ""
+}
+
 // IsValid validates that the RecentChart has all required fields.
 func (r RecentChart) IsValid() error {
 	if r.DisplayName == "" {
 		return errors.New("displayName required")
 	}
 
-	if !r.IsLocal() {
+	switch {
+	case r.IsOCI():
+		if r.Version == "" {
+			return errors.New("version required for OCI charts")
+		}
+	case !r.IsLocal():
 		if r.RepoName == "" || r.ChartName == "" {
 			return errors.New("repoName and chartName required for remote charts")
 		}
