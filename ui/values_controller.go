@@ -48,9 +48,10 @@ const (
 
 // filePickerResult bundles the path with context about which picker opened it.
 type filePickerResult struct {
-	path          string
-	isChartPicker bool
-	columnIdx     int
+	path           string
+	isChartPicker  bool
+	isValuesPicker bool
+	columnIdx      int
 }
 
 // ValuesController owns all values/column/render/save/recent-values concerns.
@@ -79,6 +80,13 @@ type ValuesController struct {
 
 	// OnOpenLocalChart is called when a chart file picker result is received.
 	OnOpenLocalChart func(path string)
+
+	// OnPendingValuesFileSelected is called when a values file picker on the repos page yields a result.
+	OnPendingValuesFileSelected func(path string)
+
+	// OnPendingValuesConsumed is called after a pending values file is auto-loaded,
+	// so the caller can record the values+chart pairing.
+	OnPendingValuesConsumed func(path string)
 
 	// pendingSave tracks the kind of save for the current ExportRunner operation.
 	// Safe to overwrite: ExportRunner.dispatch cancels prior ops, so pendingSave
@@ -197,6 +205,17 @@ func (vc *ValuesController) pollDefaultValues() {
 				ed.SingleLine = true
 				ed.Alignment = text.End
 				ed.SetText(entry.Value)
+			}
+
+			// Auto-load a values file queued from the repos page drop zone.
+			if vc.NavState.PendingValuesPath != "" {
+				path := vc.NavState.PendingValuesPath
+				vc.NavState.PendingValuesPath = ""
+				vc.OnColumnFilesSelected(0, []string{path})
+
+				if vc.OnPendingValuesConsumed != nil {
+					vc.OnPendingValuesConsumed(path)
+				}
 			}
 		}
 	}
@@ -336,6 +355,10 @@ func (vc *ValuesController) pollFilePicker() {
 	case res.Value.isChartPicker:
 		if vc.OnOpenLocalChart != nil {
 			vc.OnOpenLocalChart(res.Value.path)
+		}
+	case res.Value.isValuesPicker:
+		if vc.OnPendingValuesFileSelected != nil {
+			vc.OnPendingValuesFileSelected(res.Value.path)
 		}
 	default:
 		vc.OnColumnFilesSelected(res.Value.columnIdx, []string{res.Value.path})
@@ -477,6 +500,11 @@ func (vc *ValuesController) onOpenColumnFile(colIdx int) {
 
 func (vc *ValuesController) OnOpenChartFilePicker() {
 	vc.openFilePicker(filePickerResult{isChartPicker: true}, ".tgz", ".yaml", ".yml")
+}
+
+// OpenValuesFilePicker opens a file picker for values files on the repos page.
+func (vc *ValuesController) OpenValuesFilePicker() {
+	vc.openFilePicker(filePickerResult{isValuesPicker: true}, ".yaml", ".yml")
 }
 
 func (vc *ValuesController) onRevealColumnFile(colIdx int) {

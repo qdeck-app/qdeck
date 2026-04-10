@@ -302,8 +302,8 @@ func layoutHorizontalSeparator(gtx layout.Context, left, right unit.Dp) layout.D
 	})
 }
 
-func layoutPanelLabel(gtx layout.Context, th *material.Theme, text string, left, top, bottom unit.Dp) layout.Dimensions {
-	return layout.Inset{Left: left, Top: top, Bottom: bottom}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+func layoutPanelLabel(gtx layout.Context, th *material.Theme, text string, top, bottom unit.Dp) layout.Dimensions {
+	return layout.Inset{Top: top, Bottom: bottom}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return material.Body2(th, text).Layout(gtx)
 	})
 }

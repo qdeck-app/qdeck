@@ -26,6 +26,9 @@ const (
 // DropEvent carries the file paths from a native drag-and-drop operation.
 type DropEvent struct {
 	Paths []string
+	// PositionY is the vertical drop coordinate in window pixels (from top).
+	// Negative when unavailable.
+	PositionY float32
 }
 
 // Target listens for OS-level file drag-and-drop events
@@ -79,9 +82,9 @@ func (t *Target) PollDragState() (DragState, bool) {
 // a CGo //export callback on the main thread; calling Invalidate directly
 // would create a nested CGo call (Invalidate → C.gio_wakeupMainThread)
 // that deadlocks the main thread.
-func (t *Target) sendDrop(paths []string) { //nolint:unused // called from platform-specific CGo callbacks (_macos.go, _windows.go)
+func (t *Target) sendDrop(paths []string, posY float32) { //nolint:unused // called from platform-specific CGo callbacks (_macos.go, _windows.go)
 	select {
-	case t.drops <- DropEvent{Paths: paths}:
+	case t.drops <- DropEvent{Paths: paths, PositionY: posY}:
 	default:
 		slog.Warn("drop event discarded, channel full", "paths", len(paths))
 	}

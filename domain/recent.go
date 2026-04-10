@@ -58,3 +58,31 @@ type RecentValuesFile struct {
 	Path     string    `json:"path"`
 	OpenedAt time.Time `json:"openedAt"`
 }
+
+// RecentValuesEntry pairs a values file with the chart it was used with.
+// Chart reference fields mirror RecentChart to support all chart sources.
+type RecentValuesEntry struct {
+	ValuesPath string `json:"valuesPath"`
+
+	// Chart reference (repo / OCI / local — same as RecentChart)
+	RepoName  string `json:"repoName,omitempty"`
+	ChartName string `json:"chartName,omitempty"`
+	Version   string `json:"version,omitempty"`
+	OciURL    string `json:"ociUrl,omitempty"`
+	LocalPath string `json:"localPath,omitempty"`
+
+	ChartDisplayName string    `json:"chartDisplayName"`
+	OpenedAt         time.Time `json:"openedAt"`
+}
+
+// ChartRef returns a RecentChart built from this entry's chart fields.
+func (e RecentValuesEntry) ChartRef() RecentChart {
+	return RecentChart{
+		RepoName:    e.RepoName,
+		ChartName:   e.ChartName,
+		Version:     e.Version,
+		OciURL:      e.OciURL,
+		LocalPath:   e.LocalPath,
+		DisplayName: e.ChartDisplayName,
+	}
+}
