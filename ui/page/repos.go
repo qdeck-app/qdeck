@@ -34,6 +34,7 @@ const (
 
 	homeDropZoneTitle = "Drop chart directory, Chart.yaml, or .tar.gz here"
 	browseButtonLabel = "Browse"
+	directLinkHint    = "repo/chart:version or oci://registry/chart:version"
 	addRepoLabel      = "+ Add Repository"
 	cancelRepoLabel   = "- Cancel"
 
@@ -82,6 +83,7 @@ type ReposPage struct {
 	OnSelectRecentChart   func(entry domain.RecentChart)
 	OnRemoveRecentChart   func(idx int)
 	OnOpenChartFilePicker func()
+	OnDirectLinkSubmit    func(text string)
 
 	// confirmDialog lives on the page (not State) to avoid State importing the widget
 	// package. Button pointers (ConfirmYes/No) live on State and are re-assigned on each
@@ -153,7 +155,9 @@ func (p *ReposPage) Layout(gtx layout.Context) layout.Dimensions {
 	)
 }
 
-// layoutChartsSection renders the "Charts" header, compact drop zone, and recent chart items.
+// layoutChartsSection renders the "Charts" header, compact drop zone, direct link input, and recent chart items.
+//
+//nolint:dupl // same Gio flex pattern as layoutRepositoriesSection but entirely different children
 func (p *ReposPage) layoutChartsSection(gtx layout.Context) layout.Dimensions {
 	return layout.Inset{
 		Left: repoPaddingContent, Right: repoPaddingContent, Bottom: repoPaddingBottom,
@@ -163,6 +167,7 @@ func (p *ReposPage) layoutChartsSection(gtx layout.Context) layout.Dimensions {
 				return layoutPanelLabel(gtx, p.Theme, "Recent Charts", 0, sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutCompactDropZone),
+			layout.Rigid(p.layoutDirectLinkInput),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layoutCappedHeight(gtx, recentChartsMaxHeight, p.layoutRecentChartItems)
 			}),
@@ -183,6 +188,29 @@ func (p *ReposPage) layoutCompactDropZone(gtx layout.Context) layout.Dimensions 
 		p.homeDropZone.ButtonLabel = browseButtonLabel
 
 		return p.homeDropZone.Layout(gtx, p.Theme)
+	})
+}
+
+func (p *ReposPage) layoutDirectLinkInput(gtx layout.Context) layout.Dimensions {
+	p.State.DirectLinkEditor.Submit = true
+
+	for {
+		ev, ok := p.State.DirectLinkEditor.Update(gtx)
+		if !ok {
+			break
+		}
+
+		if _, isSubmit := ev.(widget.SubmitEvent); isSubmit {
+			text := p.State.DirectLinkEditor.Text()
+			if text != "" && p.OnDirectLinkSubmit != nil {
+				p.OnDirectLinkSubmit(text)
+				p.State.DirectLinkEditor.SetText("")
+			}
+		}
+	}
+
+	return layout.Inset{Bottom: cardItemSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layoutEditorField(gtx, p.Theme, &p.State.DirectLinkEditor, directLinkHint, 0)
 	})
 }
 
@@ -235,6 +263,8 @@ func (p *ReposPage) layoutRecentChartItems(gtx layout.Context) layout.Dimensions
 }
 
 // layoutRepositoriesSection renders the "Repositories" header, add row, form, and repo list.
+//
+//nolint:dupl // same Gio flex pattern as layoutChartsSection but entirely different children
 func (p *ReposPage) layoutRepositoriesSection(gtx layout.Context) layout.Dimensions {
 	if p.State.Loading && len(p.State.Repos) == 0 {
 		return layoutCenteredLoading(gtx, p.Theme)
@@ -477,15 +507,24 @@ func (p *ReposPage) handleKeyEvents(gtx layout.Context) {
 	event.Op(gtx.Ops, p)
 	area.Pop()
 
-	for {
-		ev, ok := gtx.Event(
-			key.Filter{Name: key.NameTab},
-			key.Filter{Name: key.NameTab, Required: key.ModShift},
-			key.Filter{Name: key.NameUpArrow},
-			key.Filter{Name: key.NameDownArrow},
+	editorFocused := gtx.Focused(&p.State.DirectLinkEditor)
+
+	filters := []event.Filter{
+		key.Filter{Name: key.NameTab},
+		key.Filter{Name: key.NameTab, Required: key.ModShift},
+		key.Filter{Name: key.NameUpArrow},
+		key.Filter{Name: key.NameDownArrow},
+	}
+
+	if !editorFocused {
+		filters = append(filters,
 			key.Filter{Name: key.NameReturn},
 			key.Filter{Name: key.NameEnter},
 		)
+	}
+
+	for {
+		ev, ok := gtx.Event(filters...)
 		if !ok {
 			break
 		}
@@ -593,9 +632,12 @@ func (p *ReposPage) activateFocused() {
 }
 
 func recentSubtitle(entry domain.RecentChart) string {
-	if entry.IsLocal() {
+	switch {
+	case entry.IsLocal():
 		return "Local: " + filepath.Base(entry.LocalPath)
+	case entry.IsOCI():
+		return "OCI: " + entry.OciURL
+	default:
+		return entry.RepoName
 	}
-
-	return entry.RepoName
 }
