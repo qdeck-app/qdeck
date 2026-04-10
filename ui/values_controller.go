@@ -20,6 +20,7 @@ import (
 
 	"github.com/qdeck-app/qdeck/config"
 	"github.com/qdeck-app/qdeck/domain"
+	gitadapter "github.com/qdeck-app/qdeck/infrastructure/git"
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/async"
 	"github.com/qdeck-app/qdeck/ui/page"
@@ -73,6 +74,7 @@ type ValuesController struct {
 	DefaultValuesRunner  *async.Runner[*service.FlatValues]
 	CustomValuesRunners  [state.MaxCustomColumns]*async.Runner[*service.FlatValues]
 	EditorParseRunners   [state.MaxCustomColumns]*async.Runner[*service.FlatValues]
+	GitCompareRunners    [state.MaxCustomColumns]*async.Runner[map[string]domain.GitChangeStatus]
 	RenderTemplateRunner *async.Runner[string]
 	ExportRunner         *async.Runner[string]
 	RecentValuesRunner   *async.Runner[[]domain.RecentValuesFile]
@@ -140,6 +142,7 @@ func newValuesController(
 	for i := range vc.CustomValuesRunners {
 		vc.CustomValuesRunners[i] = async.NewRunner[*service.FlatValues](w, 1)
 		vc.EditorParseRunners[i] = async.NewRunner[*service.FlatValues](w, 1)
+		vc.GitCompareRunners[i] = async.NewRunner[map[string]domain.GitChangeStatus](w, 1)
 	}
 
 	vc.overwriteDialog.YesButton = &vc.overwriteDialogYes
@@ -175,6 +178,7 @@ func (vc *ValuesController) PollAsync() {
 	vc.pollDefaultValues()
 	vc.pollCustomValues()
 	vc.pollEditorParse()
+	vc.pollGitCompare()
 	vc.pollRecentValues()
 	vc.pollRenderRunner()
 	vc.pollExportRunner()
@@ -232,6 +236,42 @@ func (vc *ValuesController) pollCustomValues() {
 				col.CustomValues = res.Value
 
 				vc.populateColumnOverrides(i)
+				vc.triggerGitCompare(i)
+			}
+		}
+	}
+}
+
+func (vc *ValuesController) triggerGitCompare(colIdx int) {
+	col := &vc.State.Columns[colIdx]
+
+	// Only compare single-file columns; merged multi-file columns have ambiguous baselines.
+	if len(col.CustomFilePaths) != 1 {
+		col.GitChanges = nil
+
+		return
+	}
+
+	filePath := col.CustomFilePaths[0]
+
+	vc.GitCompareRunners[colIdx].RunWithTimeout(config.GitCompareOperation, func(ctx context.Context) (map[string]domain.GitChangeStatus, error) {
+		headContent, err := gitadapter.ShowHEAD(ctx, filePath)
+		if err != nil {
+			return nil, fmt.Errorf("git show HEAD for %s: %w", filePath, err)
+		}
+
+		return vc.ValuesService.CompareWithBaseline(ctx, filePath, headContent)
+	})
+}
+
+func (vc *ValuesController) pollGitCompare() {
+	for i := range vc.GitCompareRunners {
+		if res, ok := vc.GitCompareRunners[i].Poll(); ok {
+			if res.Err != nil {
+				// Silently skip — git not available or file untracked.
+				vc.State.Columns[i].GitChanges = nil
+			} else {
+				vc.State.Columns[i].GitChanges = res.Value
 			}
 		}
 	}
@@ -328,6 +368,7 @@ func (vc *ValuesController) pollExportRunner() {
 				}
 
 				vc.State.RebuildHelmInstallCmd()
+				vc.triggerGitCompare(vc.saveColumnIdx)
 			}
 
 			vc.reRenderIfViewerOpen()
@@ -390,6 +431,7 @@ func (vc *ValuesController) ResetState() {
 	for i := range vc.CustomValuesRunners {
 		vc.CustomValuesRunners[i].Stop()
 		vc.EditorParseRunners[i].Stop()
+		vc.GitCompareRunners[i].Stop()
 	}
 
 	vc.pendingSave = saveNone
@@ -710,6 +752,7 @@ func (vc *ValuesController) onClearColumn(colIdx int) {
 
 	vc.CustomValuesRunners[colIdx].Stop()
 	vc.EditorParseRunners[colIdx].Stop()
+	vc.GitCompareRunners[colIdx].Stop()
 	vc.State.Columns[colIdx].Reset()
 	vc.State.RebuildHelmInstallCmd()
 }
@@ -722,17 +765,20 @@ func (vc *ValuesController) onRemoveColumn(colIdx int) {
 	// Cancel in-flight work for the removed column.
 	vc.CustomValuesRunners[colIdx].Stop()
 	vc.EditorParseRunners[colIdx].Stop()
+	vc.GitCompareRunners[colIdx].Stop()
 
 	// Shift columns and their corresponding runners left.
 	for i := colIdx; i < state.MaxCustomColumns-1; i++ {
 		vc.State.Columns[i] = vc.State.Columns[i+1]
 		vc.CustomValuesRunners[i] = vc.CustomValuesRunners[i+1]
 		vc.EditorParseRunners[i] = vc.EditorParseRunners[i+1]
+		vc.GitCompareRunners[i] = vc.GitCompareRunners[i+1]
 	}
 
 	vc.State.Columns[state.MaxCustomColumns-1].Reset()
 	vc.CustomValuesRunners[state.MaxCustomColumns-1] = async.NewRunner[*service.FlatValues](vc.Window, 1)
 	vc.EditorParseRunners[state.MaxCustomColumns-1] = async.NewRunner[*service.FlatValues](vc.Window, 1)
+	vc.GitCompareRunners[state.MaxCustomColumns-1] = async.NewRunner[map[string]domain.GitChangeStatus](vc.Window, 1)
 	vc.State.ColumnCount--
 	vc.State.RebuildHelmInstallCmd()
 

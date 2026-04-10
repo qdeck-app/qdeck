@@ -309,6 +309,53 @@ func (s *ValuesService) SaveValuesFile(ctx context.Context, yamlText, destPath s
 	return nil
 }
 
+// CompareWithBaseline compares a current values file against baseline content (e.g. from git HEAD).
+// Returns a map of flat keys to their change status. Only added/modified keys are included.
+func (s *ValuesService) CompareWithBaseline(
+	ctx context.Context, currentFilePath string, baselineContent []byte,
+) (map[string]domain.GitChangeStatus, error) {
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("compare with baseline: %w", ctx.Err())
+	}
+
+	// Parse baseline.
+	baseVals, err := chartutil.ReadValues(baselineContent)
+	if err != nil {
+		return nil, fmt.Errorf("parse baseline values: %w", err)
+	}
+
+	baseFlat := flattenValues("baseline", baseVals)
+
+	// Parse current file.
+	curVals, err := chartutil.ReadValuesFile(currentFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read current values %s: %w", currentFilePath, err)
+	}
+
+	curFlat := flattenValues(currentFilePath, curVals)
+
+	// Build baseline lookup.
+	baseLookup := make(map[string]string, len(baseFlat.Entries))
+	for _, e := range baseFlat.Entries {
+		baseLookup[string(e.Key)] = e.Value
+	}
+
+	changes := make(map[string]domain.GitChangeStatus)
+
+	for _, e := range curFlat.Entries {
+		key := string(e.Key)
+
+		baseVal, exists := baseLookup[key]
+		if !exists {
+			changes[key] = domain.GitAdded
+		} else if baseVal != e.Value {
+			changes[key] = domain.GitModified
+		}
+	}
+
+	return changes, nil
+}
+
 func toFlatDTO(vf *domain.ValuesFile) *FlatValues {
 	entries := make([]FlatValueEntry, len(vf.Entries))
 	for i, e := range vf.Entries {

@@ -29,6 +29,9 @@ const (
 	RecentValuesLoadOperation
 	RecentValuesEntriesLoadOperation
 
+	// Git operations
+	GitCompareOperation
+
 	// File operations
 	FileExportOperation
 	FilePickerOperation

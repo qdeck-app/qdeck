@@ -25,6 +25,14 @@ var (
 	ColorInputBorder  = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
 	ColorTextPrimary  = color.NRGBA{A: 255}
 
+	// Git change highlights for values table (pastel row backgrounds).
+	ColorGitAdded    = color.NRGBA{R: 200, G: 235, B: 200, A: 255}
+	ColorGitModified = color.NRGBA{R: 200, G: 220, B: 245, A: 255}
+
+	// Git indicator bar colors (saturated, for left-edge stripe).
+	ColorGitAddedBar    = color.NRGBA{R: 50, G: 180, B: 50, A: 255}
+	ColorGitModifiedBar = color.NRGBA{R: 60, G: 130, B: 220, A: 255}
+
 	// Focus highlight for keyboard navigation.
 	ColorFocus = color.NRGBA{R: 80, G: 120, B: 200, A: 40}
 

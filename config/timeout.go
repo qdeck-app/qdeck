@@ -32,7 +32,8 @@ func TimeoutForOperation(op OperationType) time.Duration {
 	// File I/O operations
 	case ChartLoadOperation, ChartSaveOperation,
 		ValuesLoadOperation, ValuesSaveOperation,
-		FileExportOperation, FilePickerOperation:
+		FileExportOperation, FilePickerOperation,
+		GitCompareOperation:
 		return FileIOTimeout
 
 	// In-memory operations
