@@ -157,6 +157,7 @@ func (vc *ValuesController) Callbacks() page.ValuesPageCallbacks {
 		OnRenderDefaults:        vc.onRenderDefaults,
 		OnRenderOverrides:       vc.onRenderOverrides,
 		OnKeyCopied:             vc.onKeyCopied,
+		OnShowCommentsChanged:   vc.onShowCommentsChanged,
 	}
 }
 
@@ -908,4 +909,12 @@ func (vc *ValuesController) OnSaveChartVersion(chartName, version string) {
 
 		return vc.ChartService.SaveChartAsTarGz(ctx, chartPath)
 	})
+}
+
+func (vc *ValuesController) onShowCommentsChanged(show bool) {
+	go func() {
+		if err := vc.RecentService.SaveShowComments(context.Background(), show); err != nil {
+			slog.Error("save show comments preference", "error", err)
+		}
+	}()
 }

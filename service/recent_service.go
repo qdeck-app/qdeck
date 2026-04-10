@@ -180,6 +180,34 @@ func (s *RecentService) RemoveRecentValues(ctx context.Context, idx int) error {
 	return nil
 }
 
+// LoadShowComments returns the persisted "show comments" preference.
+// Returns false when the preference has never been saved.
+func (s *RecentService) LoadShowComments(ctx context.Context) (bool, error) {
+	data, err := s.store.Load(ctx)
+	if err != nil {
+		return false, fmt.Errorf("load show comments: %w", err)
+	}
+
+	if data.ShowComments == nil {
+		return false, nil
+	}
+
+	return *data.ShowComments, nil
+}
+
+// SaveShowComments persists the "show comments" preference.
+func (s *RecentService) SaveShowComments(ctx context.Context, show bool) error {
+	if err := s.store.Update(ctx, func(data *storage.AppData) error {
+		data.ShowComments = &show
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("save show comments: %w", err)
+	}
+
+	return nil
+}
+
 func matchesChart(a, b domain.RecentChart) bool {
 	if a.IsLocal() && b.IsLocal() {
 		return a.LocalPath == b.LocalPath

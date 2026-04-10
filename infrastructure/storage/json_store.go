@@ -15,6 +15,7 @@ import (
 type AppData struct {
 	RecentCharts []domain.RecentChart      `json:"recentCharts"`
 	RecentValues []domain.RecentValuesFile `json:"recentValues"`
+	ShowComments *bool                     `json:"showComments,omitempty"`
 }
 
 // JSONStore reads and writes AppData to a JSON file.

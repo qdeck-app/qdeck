@@ -157,6 +157,8 @@ func NewApplication(
 		OnSelectVersion: a.onSelectVersion,
 		OnSaveChart:     a.valuesCtrl.OnSaveChartVersion,
 	}
+	a.loadShowComments()
+
 	a.valuesPage = page.NewValuesPage(th, &a.valuesState, a.valuesCtrl.Callbacks())
 
 	a.loadRepos()
@@ -633,6 +635,17 @@ func (a *Application) preloadCharts(repos []domain.HelmRepository) {
 			}
 		}
 	}()
+}
+
+func (a *Application) loadShowComments() {
+	show, err := a.recentService.LoadShowComments(context.Background())
+	if err != nil {
+		slog.Error("load show comments preference", "error", err)
+
+		return
+	}
+
+	a.valuesState.ShowComments.Value = show
 }
 
 func (a *Application) loadRecentCharts() {

@@ -189,6 +189,7 @@ type ValuesPageState struct {
 	RenderDefaultsButton  widget.Clickable
 	RenderOverridesButton widget.Clickable
 	RenderLoading         bool
+	ShowComments          widget.Bool
 
 	// Helm install command (cached, rebuilt on chart/file changes)
 	HelmInstallCmd    string
