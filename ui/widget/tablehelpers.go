@@ -53,3 +53,15 @@ func paintRowBg(gtx layout.Context, height int, c color.NRGBA) {
 	paint.PaintOp{}.Add(gtx.Ops)
 	rect.Pop()
 }
+
+const gitIndicatorWidth = 4
+
+// paintGitIndicator draws a narrow vertical bar at the given x position.
+func paintGitIndicator(gtx layout.Context, x, height int, c color.NRGBA) {
+	w := gtx.Dp(gitIndicatorWidth)
+
+	rect := clip.Rect{Min: image.Pt(x, 0), Max: image.Pt(x+w, height)}.Push(gtx.Ops)
+	paint.ColorOp{Color: c}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	rect.Pop()
+}

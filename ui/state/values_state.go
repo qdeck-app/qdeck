@@ -58,6 +58,10 @@ type CustomColumnState struct {
 
 	// Editor parse error (shown when override YAML is invalid)
 	EditorParseError string
+
+	// GitChanges maps flat keys to their git change status (added/modified vs HEAD).
+	// nil when git comparison is not available or file is not tracked.
+	GitChanges map[string]domain.GitChangeStatus
 }
 
 // EnsureEditors grows the override editor slice only when data exceeds capacity.
@@ -131,6 +135,7 @@ func (c *CustomColumnState) Reset() {
 	c.ValuesModified = false
 	c.FileDropActive = false
 	c.EditorParseError = ""
+	c.GitChanges = nil
 
 	for i := range c.OverrideEditors {
 		c.OverrideEditors[i].SetText("")
