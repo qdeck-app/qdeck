@@ -315,6 +315,7 @@ const (
 func (a *Application) layout(gtx layout.Context) layout.Dimensions {
 	a.handleKeyEvents(gtx)
 	a.handleUnsavedDialog(gtx)
+	a.valuesCtrl.HandleOverwriteDialog(gtx)
 
 	if clicked := a.breadcrumb.Clicked(gtx); clicked >= 0 {
 		a.onBreadcrumbClick(clicked)
@@ -349,6 +350,9 @@ func (a *Application) layout(gtx layout.Context) layout.Dimensions {
 			}
 
 			return a.unsavedDialog.Layout(gtx, a.theme, "You have unsaved changes. Discard and leave?")
+		}),
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			return a.valuesCtrl.LayoutOverwriteDialog(gtx, a.theme)
 		}),
 	)
 }
@@ -471,6 +475,8 @@ func (a *Application) handleKeyEvents(gtx layout.Context) {
 		switch {
 		case e.Name == key.NameEscape:
 			switch {
+			case a.valuesCtrl.IsOverwriteDialogActive():
+				a.valuesCtrl.DismissOverwriteDialog()
 			case a.unsavedDialogActive:
 				a.unsavedDialogActive = false
 				a.unsavedPending = pendingNone
