@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"gioui.org/app"
+	"gioui.org/layout"
 	"gioui.org/text"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
 	"gioui.org/x/explorer"
 	"gopkg.in/yaml.v3"
 
@@ -85,6 +88,14 @@ type ValuesController struct {
 	chartSaveInFlight bool // true when ExportRunner was started by OnSaveChartVersion
 	viewerLink        *customwidget.ViewerLink
 	lastRenderMode    renderMode
+
+	// Overwrite confirmation dialog (shown when file changed on disk).
+	overwriteDialog       customwidget.ConfirmDialog
+	overwriteDialogYes    widget.Clickable
+	overwriteDialogNo     widget.Clickable
+	overwriteDialogActive bool
+	overwritePendingCol   int
+	overwritePendingYAML  string
 }
 
 func newValuesController(
@@ -122,6 +133,9 @@ func newValuesController(
 		vc.CustomValuesRunners[i] = async.NewRunner[*service.FlatValues](w, 1)
 		vc.EditorParseRunners[i] = async.NewRunner[*service.FlatValues](w, 1)
 	}
+
+	vc.overwriteDialog.YesButton = &vc.overwriteDialogYes
+	vc.overwriteDialog.NoButton = &vc.overwriteDialogNo
 
 	return vc
 }
@@ -289,6 +303,10 @@ func (vc *ValuesController) pollExportRunner() {
 				col.ValuesModified = false
 				col.CustomFilePaths = []string{res.Value}
 
+				if info, err := os.Stat(res.Value); err == nil {
+					col.FileModTime = info.ModTime()
+				}
+
 				vc.State.RebuildHelmInstallCmd()
 			}
 
@@ -402,6 +420,10 @@ func (vc *ValuesController) OnColumnFilesSelected(colIdx int, paths []string) {
 	col := &vc.State.Columns[colIdx]
 	col.CustomFilePaths = paths
 	col.MergedFileCount = len(paths)
+
+	if info, err := os.Stat(paths[0]); err == nil {
+		col.FileModTime = info.ModTime()
+	}
 
 	vc.State.RebuildHelmInstallCmd()
 
@@ -552,13 +574,18 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 	if len(col.CustomFilePaths) > 0 {
 		path := col.CustomFilePaths[0]
 
-		vc.ExportRunner.RunWithTimeout(config.FileExportOperation, func(ctx context.Context) (string, error) {
-			if err := vc.ValuesService.SaveValuesFile(ctx, yamlText, path); err != nil {
-				return "", fmt.Errorf("save values: %w", err)
-			}
+		// Check if the file was modified externally since we loaded it.
+		if !col.FileModTime.IsZero() {
+			if info, err := os.Stat(path); err == nil && info.ModTime().After(col.FileModTime) {
+				vc.overwriteDialogActive = true
+				vc.overwritePendingCol = colIdx
+				vc.overwritePendingYAML = yamlText
 
-			return path, nil
-		})
+				return
+			}
+		}
+
+		vc.saveToFile(yamlText, path)
 
 		return
 	}
@@ -586,6 +613,59 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 
 		return "values.yaml", nil
 	})
+}
+
+func (vc *ValuesController) saveToFile(yamlText, path string) {
+	vc.ExportRunner.RunWithTimeout(config.FileExportOperation, func(ctx context.Context) (string, error) {
+		if err := vc.ValuesService.SaveValuesFile(ctx, yamlText, path); err != nil {
+			return "", fmt.Errorf("save values: %w", err)
+		}
+
+		return path, nil
+	})
+}
+
+// IsOverwriteDialogActive reports whether the overwrite confirmation dialog is visible.
+func (vc *ValuesController) IsOverwriteDialogActive() bool {
+	return vc.overwriteDialogActive
+}
+
+// DismissOverwriteDialog hides the overwrite confirmation dialog without saving.
+func (vc *ValuesController) DismissOverwriteDialog() {
+	vc.overwriteDialogActive = false
+	vc.overwritePendingYAML = ""
+}
+
+// HandleOverwriteDialog processes confirm/cancel clicks on the overwrite-changes dialog.
+func (vc *ValuesController) HandleOverwriteDialog(gtx layout.Context) {
+	if !vc.overwriteDialogActive {
+		return
+	}
+
+	switch vc.overwriteDialog.Update(gtx) {
+	case customwidget.ConfirmYes:
+		vc.overwriteDialogActive = false
+
+		col := &vc.State.Columns[vc.overwritePendingCol]
+		if len(col.CustomFilePaths) > 0 {
+			vc.pendingSave = saveValues
+			vc.saveColumnIdx = vc.overwritePendingCol
+			vc.saveToFile(vc.overwritePendingYAML, col.CustomFilePaths[0])
+		}
+
+		vc.overwritePendingYAML = ""
+	case customwidget.ConfirmNo:
+		vc.DismissOverwriteDialog()
+	}
+}
+
+// LayoutOverwriteDialog renders the overwrite confirmation dialog if active.
+func (vc *ValuesController) LayoutOverwriteDialog(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	if !vc.overwriteDialogActive {
+		return layout.Dimensions{}
+	}
+
+	return vc.overwriteDialog.Layout(gtx, th, "This file has been modified externally. Overwrite changes?")
 }
 
 func (vc *ValuesController) onAddColumn() {

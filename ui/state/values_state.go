@@ -3,6 +3,7 @@ package state
 import (
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gioui.org/widget"
 
@@ -36,6 +37,9 @@ type CustomColumnState struct {
 	// Updated by MarkOverride; rebuilt by RebuildOverrideFlags.
 	overrideFlags []bool
 	overrideCount int // number of true entries in overrideFlags
+
+	// File modification tracking
+	FileModTime time.Time // mod time recorded at load/save for external-change detection
 
 	// Modification tracking
 	ValuesModified bool
@@ -123,6 +127,7 @@ func (c *CustomColumnState) Reset() {
 	c.CustomValues = nil
 	c.CustomFilePaths = c.CustomFilePaths[:0]
 	c.MergedFileCount = 0
+	c.FileModTime = time.Time{}
 	c.ValuesModified = false
 	c.FileDropActive = false
 	c.EditorParseError = ""
