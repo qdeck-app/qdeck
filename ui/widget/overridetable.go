@@ -76,6 +76,9 @@ type OverrideTable struct {
 	// ColumnRatio controls the left proportion (0..1). Defaults to overrideDefaultRatio.
 	ColumnRatio float32
 
+	// ShowComments controls whether comment lines above default value entries are displayed.
+	ShowComments bool
+
 	hovers     []gesture.Hover
 	cellClicks []gesture.Click
 	HoveredRow int
@@ -267,7 +270,7 @@ func (t *OverrideTable) layoutRow(
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			// Comment above entry (optional), constrained to left panel width.
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if entry.Comment == "" {
+				if entry.Comment == "" || !t.ShowComments {
 					return layout.Dimensions{}
 				}
 
