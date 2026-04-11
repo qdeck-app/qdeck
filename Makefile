@@ -16,8 +16,8 @@ build_macos_app:
 	@echo "Building macOS..."
 	gogio -ldflags="-X github.com/qdeck-app/qdeck/infra/config.AppVersion=$(TAG_NAME)" -appid=rest.${APP_NAME_LOWERCASE}.app -icon=./assets/appicon.png -target=macos -arch=amd64 -o ./dist/amd64/${APP_NAME}.app .
 	gogio -ldflags="-X github.com/qdeck-app/qdeck/infra/config.AppVersion=$(TAG_NAME)" -appid=rest.${APP_NAME_LOWERCASE}.app -icon=./assets/appicon.png -target=macos -arch=arm64 -o ./dist/arm64/${APP_NAME}.app .
-	cp ./assets/appicon.icns ./dist/amd64/${APP_NAME}.app/Contents/Resources/appicon.icns
-	cp ./assets/appicon.icns ./dist/arm64/${APP_NAME}.app/Contents/Resources/appicon.icns
+	cp ./assets/appicon.icns ./dist/amd64/${APP_NAME}.app/Contents/Resources/icon.icns
+	cp ./assets/appicon.icns ./dist/arm64/${APP_NAME}.app/Contents/Resources/icon.icns
 	codesign --force --deep --sign - ./dist/amd64/${APP_NAME}.app
 	codesign --force --deep --sign - ./dist/arm64/${APP_NAME}.app
 
@@ -73,8 +73,8 @@ build_macos_signed:
 	gogio -ldflags="-X github.com/qdeck-app/qdeck/infra/config.AppVersion=$(TAG_NAME)" -appid=rest.${APP_NAME_LOWERCASE}.app -icon=./assets/appicon.png -target=macos -arch=arm64 -o ./dist/arm64/${APP_NAME}.app .
 
 	@echo "Replacing icons..."
-	cp ./assets/appicon.icns ./dist/amd64/${APP_NAME}.app/Contents/Resources/appicon.icns
-	cp ./assets/appicon.icns ./dist/arm64/${APP_NAME}.app/Contents/Resources/appicon.icns
+	cp ./assets/appicon.icns ./dist/amd64/${APP_NAME}.app/Contents/Resources/icon.icns
+	cp ./assets/appicon.icns ./dist/arm64/${APP_NAME}.app/Contents/Resources/icon.icns
 
 	@echo "Signing amd64..."
 	xattr -cr ./dist/amd64/${APP_NAME}.app && codesign --force --options runtime --deep -vvv --sign "$(IDENTITY)" ./dist/amd64/${APP_NAME}.app
