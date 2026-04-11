@@ -78,7 +78,14 @@ static BOOL imp_performDragOperation(id self, SEL _cmd, id<NSDraggingInfo> sende
 		cpaths[i] = [pathStrings[i] UTF8String];
 	}
 
-	nativeDropCallback(h, (char **)cpaths, valid);
+	// Drop Y in top-left pixel coordinates.
+	// AppKit uses bottom-left origin in points; convert to top-left pixels.
+	NSPoint loc = [sender draggingLocation];
+	CGFloat viewH = [self bounds].size.height;
+	CGFloat scale = [[self window] backingScaleFactor];
+	float dropY = (float)((viewH - loc.y) * scale);
+
+	nativeDropCallback(h, (char **)cpaths, valid, dropY);
 	free(cpaths);
 
 	return YES;

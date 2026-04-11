@@ -36,6 +36,7 @@ const iidIDropTargetData1 = 0x00000122
 var (
 	ole32   = syscall.NewLazyDLL("ole32.dll")
 	shell32 = syscall.NewLazyDLL("shell32.dll")
+	user32  = syscall.NewLazyDLL("user32.dll")
 
 	procOleInitialize    = ole32.NewProc("OleInitialize")
 	procOleUninitialize  = ole32.NewProc("OleUninitialize")
@@ -43,6 +44,7 @@ var (
 	procRevokeDragDrop   = ole32.NewProc("RevokeDragDrop")
 	procReleaseStgMedium = ole32.NewProc("ReleaseStgMedium")
 	procDragQueryFileW   = shell32.NewProc("DragQueryFileW")
+	procScreenToClient   = user32.NewProc("ScreenToClient")
 )
 
 // guid is a COM globally unique identifier.
@@ -192,9 +194,12 @@ func comDrop(this, pDataObj, grfKeyState, pt, pdwEffect uintptr) uintptr {
 	dt := (*dropTarget)(unsafe.Pointer(this)) //nolint:gosec,govet // COM interface requires unsafe pointer cast.
 	dt.ndt.sendDragState(DragNone)
 
+	// POINTL contains screen coordinates. Convert to client-relative via ScreenToClient.
+	dropY := screenToClientY(dt.ndt.platform.hwnd, pt)
+
 	paths := extractDropPaths(pDataObj)
 	if len(paths) > 0 {
-		dt.ndt.sendDrop(paths)
+		dt.ndt.sendDrop(paths, dropY)
 	}
 
 	*(*uint32)(unsafe.Pointer(pdwEffect)) = dropEffectCopy //nolint:gosec,govet // COM interface requires unsafe pointer cast.
@@ -270,6 +275,22 @@ func queryDropFiles(hDrop uintptr) []string {
 	}
 
 	return paths
+}
+
+// screenToClientY converts POINTL screen coordinates to a client-relative Y value.
+// POINTL packs x in the lower 32 bits and y in the upper 32 bits.
+func screenToClientY(hwnd, pt uintptr) float32 {
+	// point matches the Win32 POINT struct: {x int32, y int32}.
+	type point struct{ x, y int32 }
+
+	p := point{
+		x: int32(pt & 0xFFFFFFFF),         //nolint:gosec,mnd // extract low 32 bits
+		y: int32((pt >> 32) & 0xFFFFFFFF), //nolint:gosec,mnd // extract high 32 bits
+	}
+
+	procScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&p))) //nolint:gosec,errcheck // Win32 BOOL return; point is valid.
+
+	return float32(p.y)
 }
 
 // platformState holds Windows-specific drop target state.

@@ -19,6 +19,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/qdeck-app/qdeck/domain"
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/state"
 	"github.com/qdeck-app/qdeck/ui/theme"
@@ -75,6 +76,9 @@ type OverrideTable struct {
 
 	// ColumnRatio controls the left proportion (0..1). Defaults to overrideDefaultRatio.
 	ColumnRatio float32
+
+	// ShowComments controls whether comment lines above default value entries are displayed.
+	ShowComments bool
 
 	hovers     []gesture.Hover
 	cellClicks []gesture.Click
@@ -267,7 +271,7 @@ func (t *OverrideTable) layoutRow(
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			// Comment above entry (optional), constrained to left panel width.
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if entry.Comment == "" {
+				if entry.Comment == "" || !t.ShowComments {
 					return layout.Dimensions{}
 				}
 
@@ -359,9 +363,18 @@ func (t *OverrideTable) layoutRow(
 	// Override highlight or hover background.
 	hasOverride := !section && t.hasAnyOverride(entryIdx)
 
+	var gitStatus domain.GitChangeStatus
+	if !section {
+		gitStatus = t.gitChangeStatus(entries[entryIdx].Key)
+	}
+
 	switch {
 	case hasOverride:
 		paintRowBg(gtx, dims.Size.Y, theme.ColorOverride)
+	case gitStatus == domain.GitAdded:
+		paintRowBg(gtx, dims.Size.Y, theme.ColorGitAdded)
+	case gitStatus == domain.GitModified:
+		paintRowBg(gtx, dims.Size.Y, theme.ColorGitModified)
 	case hovered:
 		paintRowBg(gtx, dims.Size.Y, theme.ColorHover)
 	}
@@ -371,6 +384,16 @@ func (t *OverrideTable) layoutRow(
 
 	// Row decorations: divider, sub-column dividers, tree guides, separator.
 	t.drawRowDecorations(gtx, g, entry, dims, totalW)
+
+	// Git change indicator bar on the override cell's left edge.
+	if gitStatus != domain.GitUnchanged {
+		barColor := theme.ColorGitAddedBar
+		if gitStatus == domain.GitModified {
+			barColor = theme.ColorGitModifiedBar
+		}
+
+		paintGitIndicator(gtx, g.rightStart, dims.Size.Y, barColor)
+	}
 
 	return dims
 }
@@ -658,6 +681,28 @@ func (t *OverrideTable) hasAnyOverride(entryIdx int) bool {
 	}
 
 	return false
+}
+
+// gitChangeStatus returns the highest-priority git change status for the given flat key
+// across all active columns. GitModified takes precedence over GitAdded.
+func (t *OverrideTable) gitChangeStatus(key string) domain.GitChangeStatus {
+	best := domain.GitUnchanged
+
+	for c := range t.colCount() {
+		if t.ColumnStates[c] != nil && t.ColumnStates[c].GitChanges != nil {
+			if status, ok := t.ColumnStates[c].GitChanges[key]; ok {
+				if status == domain.GitModified {
+					return domain.GitModified
+				}
+
+				if status > best {
+					best = status
+				}
+			}
+		}
+	}
+
+	return best
 }
 
 // handleDrag processes pointer events for the column resize divider.

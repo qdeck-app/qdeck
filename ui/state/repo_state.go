@@ -12,6 +12,7 @@ type RepoSection uint8
 const (
 	RepoSectionRecent RepoSection = iota
 	RepoSectionRepos
+	RepoSectionValues
 	RepoSectionAddForm
 	RepoSectionCount // sentinel value for modular cycling
 )
@@ -64,14 +65,34 @@ type RepoPageState struct {
 	RecentClicks       []widget.Clickable
 	RecentRemoveClicks []widget.Clickable
 
+	// Recent values+chart paired entries
+	RecentValuesEntries      []domain.RecentValuesEntry
+	RecentValuesList         widget.List
+	RecentValuesClicks       []widget.Clickable
+	RecentValuesRemoveClicks []widget.Clickable
+
+	// Direct link input (repo/chart:version)
+	DirectLinkEditor widget.Editor
+
 	// Chart file picker button (inside compact drop zone)
 	ChartPickerButton widget.Clickable
+
+	// Values file picker button (inside values drop zone)
+	ValuesPickerButton widget.Clickable
 
 	// FileDropActive is true when files are being dragged over the window.
 	FileDropActive bool
 
 	// DropSupported is true when the platform supports drag-and-drop.
 	DropSupported bool
+
+	// PageContentTop is the Y offset (in window pixels) of the page content area.
+	// Set by the Application layout before the page is rendered.
+	PageContentTop int
+
+	// ValuesSectionMinY is the Y offset (in window pixels) where the Values section starts.
+	// Used by the native drop handler to route drops by area.
+	ValuesSectionMinY int
 }
 
 // EnsureClickables grows clickable slices to match repo count.
@@ -96,5 +117,13 @@ func (s *RepoPageState) EnsureRecentClickables(count int) {
 	for len(s.RecentClicks) < count {
 		s.RecentClicks = append(s.RecentClicks, widget.Clickable{})
 		s.RecentRemoveClicks = append(s.RecentRemoveClicks, widget.Clickable{})
+	}
+}
+
+// EnsureRecentValuesClickables grows recent values entry clickable slices.
+func (s *RepoPageState) EnsureRecentValuesClickables(count int) {
+	for len(s.RecentValuesClicks) < count {
+		s.RecentValuesClicks = append(s.RecentValuesClicks, widget.Clickable{})
+		s.RecentValuesRemoveClicks = append(s.RecentValuesRemoveClicks, widget.Clickable{})
 	}
 }

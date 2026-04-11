@@ -27,6 +27,10 @@ const (
 	// Recent operations
 	RecentChartsLoadOperation
 	RecentValuesLoadOperation
+	RecentValuesEntriesLoadOperation
+
+	// Git operations
+	GitCompareOperation
 
 	// File operations
 	FileExportOperation

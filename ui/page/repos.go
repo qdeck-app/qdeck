@@ -26,16 +26,19 @@ const (
 	repoPaddingBottom  unit.Dp = 8
 	repoPaddingSmall   unit.Dp = 4
 
-	compactDropZoneHeight      unit.Dp = 48
-	sectionHeaderPaddingTop    unit.Dp = 12
-	sectionHeaderPaddingBottom unit.Dp = 8
-	recentChartsMaxHeight      unit.Dp = 300
-	repoListMaxHeight          unit.Dp = 400
+	compactDropZoneHeight        unit.Dp = 48
+	sectionHeaderPaddingTop      unit.Dp = 12
+	sectionHeaderPaddingBottom   unit.Dp = 8
+	recentChartsMaxHeight        unit.Dp = 300
+	recentValuesEntriesMaxHeight unit.Dp = 300
+	repoListMaxHeight            unit.Dp = 400
 
-	homeDropZoneTitle = "Drop chart directory, Chart.yaml, or .tar.gz here"
-	browseButtonLabel = "Browse"
-	addRepoLabel      = "+ Add Repository"
-	cancelRepoLabel   = "- Cancel"
+	homeDropZoneTitle   = "Drop chart directory, Chart.yaml, or .tar.gz here"
+	valuesDropZoneTitle = "Drop values file (.yaml / .yml)"
+	browseButtonLabel   = "Browse"
+	directLinkHint      = "repo/chart:version or oci://registry/chart:version"
+	addRepoLabel        = "+ Add Repository"
+	cancelRepoLabel     = "- Cancel"
 
 	presetChipPadH unit.Dp = 8
 	presetChipPadV unit.Dp = 4
@@ -78,16 +81,22 @@ type ReposPage struct {
 	OnUpdateRepo func(name string)
 	OnSelectRepo func(name string)
 
-	OnOpenLocalChart      func(path string)
-	OnSelectRecentChart   func(entry domain.RecentChart)
-	OnRemoveRecentChart   func(idx int)
-	OnOpenChartFilePicker func()
+	OnOpenLocalChart          func(path string)
+	OnSelectRecentChart       func(entry domain.RecentChart)
+	OnRemoveRecentChart       func(idx int)
+	OnOpenChartFilePicker     func()
+	OnDirectLinkSubmit        func(text string)
+	OnValuesFileDropped       func(path string)
+	OnOpenValuesFilePicker    func()
+	OnSelectRecentValuesEntry func(entry domain.RecentValuesEntry)
+	OnRemoveRecentValuesEntry func(idx int)
 
 	// confirmDialog lives on the page (not State) to avoid State importing the widget
 	// package. Button pointers (ConfirmYes/No) live on State and are re-assigned on each
 	// delete click; ConfirmActive and ConfirmDeleteName track dialog lifecycle in State.
-	confirmDialog customwidget.ConfirmDialog
-	homeDropZone  customwidget.FileDropZone
+	confirmDialog  customwidget.ConfirmDialog
+	homeDropZone   customwidget.FileDropZone
+	valuesDropZone customwidget.FileDropZone
 }
 
 //nolint:dupl // same Gio flex pattern as ChartsPage but entirely different children
@@ -96,6 +105,7 @@ func (p *ReposPage) Layout(gtx layout.Context) layout.Dimensions {
 	// Guarantees RecentClicks and RecentRemoveClicks are large enough for list callbacks below.
 	p.State.EnsureRecentClickables(len(p.State.RecentCharts))
 	p.State.EnsurePresetClickables(len(presetRepos))
+	p.State.EnsureRecentValuesClickables(len(p.State.RecentValuesEntries))
 
 	// Clamp focus index after data changes (e.g. repo deleted while focused on last item).
 	if maxIdx := p.sectionItemCount(p.State.FocusedSection) - 1; maxIdx < 0 {
@@ -118,9 +128,23 @@ func (p *ReposPage) Layout(gtx layout.Context) layout.Dimensions {
 		p.homeDropZone.FilePaths = nil
 	}
 
+	// Check for values drop — only the first file is used.
+	if len(p.valuesDropZone.FilePaths) > 0 {
+		if p.OnValuesFileDropped != nil {
+			p.OnValuesFileDropped(p.valuesDropZone.FilePaths[0])
+		}
+
+		p.valuesDropZone.FilePaths = nil
+	}
+
 	// Check for chart picker button click
 	if p.State.ChartPickerButton.Clicked(gtx) && p.OnOpenChartFilePicker != nil {
 		p.OnOpenChartFilePicker()
+	}
+
+	// Check for values picker button click
+	if p.State.ValuesPickerButton.Clicked(gtx) && p.OnOpenValuesFilePicker != nil {
+		p.OnOpenValuesFilePicker()
 	}
 
 	// Handle confirm dialog
@@ -139,6 +163,8 @@ func (p *ReposPage) Layout(gtx layout.Context) layout.Dimensions {
 		}
 	}
 
+	totalH := gtx.Constraints.Max.Y
+
 	return layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -146,23 +172,37 @@ func (p *ReposPage) Layout(gtx layout.Context) layout.Dimensions {
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return layoutHorizontalSeparator(gtx, repoPaddingContent, repoPaddingContent)
 				}),
-				layout.Flexed(1, p.layoutRepositoriesSection),
+				layout.Rigid(p.layoutRepositoriesSection),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layoutHorizontalSeparator(gtx, repoPaddingContent, repoPaddingContent)
+				}),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					// Record where the Values section starts in window coordinates
+					// for native drop routing. PageContentTop is the offset from
+					// the window top to the repos page content area.
+					p.State.ValuesSectionMinY = p.State.PageContentTop + (totalH - gtx.Constraints.Max.Y)
+
+					return p.layoutValuesSection(gtx)
+				}),
 			)
 		}),
 		layout.Expanded(p.layoutOverlay),
 	)
 }
 
-// layoutChartsSection renders the "Charts" header, compact drop zone, and recent chart items.
+// layoutChartsSection renders the "Charts" header, compact drop zone, direct link input, and recent chart items.
+//
+//nolint:dupl // same Gio flex pattern as layoutRepositoriesSection but entirely different children
 func (p *ReposPage) layoutChartsSection(gtx layout.Context) layout.Dimensions {
 	return layout.Inset{
 		Left: repoPaddingContent, Right: repoPaddingContent, Bottom: repoPaddingBottom,
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutPanelLabel(gtx, p.Theme, "Recent Charts", 0, sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
+				return layoutPanelLabel(gtx, p.Theme, "Recent Charts", sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutCompactDropZone),
+			layout.Rigid(p.layoutDirectLinkInput),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layoutCappedHeight(gtx, recentChartsMaxHeight, p.layoutRecentChartItems)
 			}),
@@ -171,18 +211,116 @@ func (p *ReposPage) layoutChartsSection(gtx layout.Context) layout.Dimensions {
 }
 
 func (p *ReposPage) layoutCompactDropZone(gtx layout.Context) layout.Dimensions {
+	return p.layoutDropZone(gtx, &p.homeDropZone, homeDropZoneTitle, &p.State.ChartPickerButton)
+}
+
+func (p *ReposPage) layoutValuesDropZone(gtx layout.Context) layout.Dimensions {
+	return p.layoutDropZone(gtx, &p.valuesDropZone, valuesDropZoneTitle, &p.State.ValuesPickerButton)
+}
+
+func (p *ReposPage) layoutDropZone(
+	gtx layout.Context,
+	zone *customwidget.FileDropZone,
+	title string,
+	pickBtn *widget.Clickable,
+) layout.Dimensions {
 	return layout.Inset{Bottom: cardItemSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Max.Y = gtx.Dp(compactDropZoneHeight)
 		gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
 
-		p.homeDropZone.Active = p.State.FileDropActive
-		p.homeDropZone.HideTitle = !p.State.DropSupported
-		p.homeDropZone.Title = homeDropZoneTitle
-		p.homeDropZone.Hint = ""
-		p.homeDropZone.PickButton = &p.State.ChartPickerButton
-		p.homeDropZone.ButtonLabel = browseButtonLabel
+		zone.Active = p.State.FileDropActive
+		zone.HideTitle = !p.State.DropSupported
+		zone.Title = title
+		zone.Hint = ""
+		zone.PickButton = pickBtn
+		zone.ButtonLabel = browseButtonLabel
 
-		return p.homeDropZone.Layout(gtx, p.Theme)
+		return zone.Layout(gtx, p.Theme)
+	})
+}
+
+// layoutValuesSection renders the "Values" header, values drop zone, and recent values+chart entries.
+func (p *ReposPage) layoutValuesSection(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{
+		Left: repoPaddingContent, Right: repoPaddingContent, Bottom: repoPaddingBottom,
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layoutPanelLabel(gtx, p.Theme, "Values", sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
+			}),
+			layout.Rigid(p.layoutValuesDropZone),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layoutCappedHeight(gtx, recentValuesEntriesMaxHeight, p.layoutRecentValuesEntries)
+			}),
+		)
+	})
+}
+
+func (p *ReposPage) layoutRecentValuesEntries(gtx layout.Context) layout.Dimensions {
+	if len(p.State.RecentValuesEntries) == 0 {
+		return layout.Dimensions{}
+	}
+
+	p.State.RecentValuesList.Axis = layout.Vertical
+
+	return material.List(p.Theme, &p.State.RecentValuesList).Layout(gtx, len(p.State.RecentValuesEntries),
+		func(gtx layout.Context, index int) layout.Dimensions {
+			entry := p.State.RecentValuesEntries[index]
+
+			removed := p.State.RecentValuesRemoveClicks[index].Clicked(gtx)
+			if removed && p.OnRemoveRecentValuesEntry != nil {
+				p.OnRemoveRecentValuesEntry(index)
+			}
+
+			if p.State.RecentValuesClicks[index].Clicked(gtx) && !removed && p.OnSelectRecentValuesEntry != nil {
+				p.OnSelectRecentValuesEntry(entry)
+			}
+
+			focused := p.State.FocusedSection == state.RepoSectionValues && p.State.FocusedIndex == index
+
+			return layoutCardFocusable(gtx, &p.State.RecentValuesClicks[index], focused,
+				func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+								layout.Rigid(material.Body2(p.Theme, filepath.Base(entry.ValuesPath)).Layout),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+									lbl := material.Caption(p.Theme, entry.ChartDisplayName)
+									lbl.Color = theme.ColorSecondary
+
+									return lbl.Layout(gtx)
+								}),
+							)
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return layoutActionButton(gtx, p.Theme, &p.State.RecentValuesRemoveClicks[index],
+								"x", theme.ColorDanger, repoPaddingSmall)
+						}),
+					)
+				})
+		})
+}
+
+func (p *ReposPage) layoutDirectLinkInput(gtx layout.Context) layout.Dimensions {
+	p.State.DirectLinkEditor.Submit = true
+
+	for {
+		ev, ok := p.State.DirectLinkEditor.Update(gtx)
+		if !ok {
+			break
+		}
+
+		if _, isSubmit := ev.(widget.SubmitEvent); isSubmit {
+			text := p.State.DirectLinkEditor.Text()
+			if text != "" && p.OnDirectLinkSubmit != nil {
+				p.OnDirectLinkSubmit(text)
+				p.State.DirectLinkEditor.SetText("")
+			}
+		}
+	}
+
+	return layout.Inset{Bottom: cardItemSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layoutEditorField(gtx, p.Theme, &p.State.DirectLinkEditor, directLinkHint, 0)
 	})
 }
 
@@ -235,6 +373,8 @@ func (p *ReposPage) layoutRecentChartItems(gtx layout.Context) layout.Dimensions
 }
 
 // layoutRepositoriesSection renders the "Repositories" header, add row, form, and repo list.
+//
+//nolint:dupl // same Gio flex pattern as layoutChartsSection but entirely different children
 func (p *ReposPage) layoutRepositoriesSection(gtx layout.Context) layout.Dimensions {
 	if p.State.Loading && len(p.State.Repos) == 0 {
 		return layoutCenteredLoading(gtx, p.Theme)
@@ -245,7 +385,7 @@ func (p *ReposPage) layoutRepositoriesSection(gtx layout.Context) layout.Dimensi
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutPanelLabel(gtx, p.Theme, "Repositories", 0, sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
+				return layoutPanelLabel(gtx, p.Theme, "Repositories", sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutAddRepoRow),
 			layout.Rigid(p.layoutAddForm),
@@ -477,15 +617,24 @@ func (p *ReposPage) handleKeyEvents(gtx layout.Context) {
 	event.Op(gtx.Ops, p)
 	area.Pop()
 
-	for {
-		ev, ok := gtx.Event(
-			key.Filter{Name: key.NameTab},
-			key.Filter{Name: key.NameTab, Required: key.ModShift},
-			key.Filter{Name: key.NameUpArrow},
-			key.Filter{Name: key.NameDownArrow},
+	editorFocused := gtx.Focused(&p.State.DirectLinkEditor)
+
+	filters := []event.Filter{
+		key.Filter{Name: key.NameTab},
+		key.Filter{Name: key.NameTab, Required: key.ModShift},
+		key.Filter{Name: key.NameUpArrow},
+		key.Filter{Name: key.NameDownArrow},
+	}
+
+	if !editorFocused {
+		filters = append(filters,
 			key.Filter{Name: key.NameReturn},
 			key.Filter{Name: key.NameEnter},
 		)
+	}
+
+	for {
+		ev, ok := gtx.Event(filters...)
 		if !ok {
 			break
 		}
@@ -567,6 +716,8 @@ func (p *ReposPage) sectionItemCount(section state.RepoSection) int {
 	switch section {
 	case state.RepoSectionRecent:
 		return len(p.State.RecentCharts)
+	case state.RepoSectionValues:
+		return len(p.State.RecentValuesEntries)
 	case state.RepoSectionRepos:
 		return len(p.State.Repos)
 	case state.RepoSectionAddForm:
@@ -582,6 +733,10 @@ func (p *ReposPage) activateFocused() {
 		if p.State.FocusedIndex < len(p.State.RecentCharts) && p.OnSelectRecentChart != nil {
 			p.OnSelectRecentChart(p.State.RecentCharts[p.State.FocusedIndex])
 		}
+	case state.RepoSectionValues:
+		if p.State.FocusedIndex < len(p.State.RecentValuesEntries) && p.OnSelectRecentValuesEntry != nil {
+			p.OnSelectRecentValuesEntry(p.State.RecentValuesEntries[p.State.FocusedIndex])
+		}
 	case state.RepoSectionRepos:
 		if p.State.FocusedIndex < len(p.State.Repos) && p.OnSelectRepo != nil {
 			p.OnSelectRepo(p.State.Repos[p.State.FocusedIndex].Name)
@@ -593,9 +748,12 @@ func (p *ReposPage) activateFocused() {
 }
 
 func recentSubtitle(entry domain.RecentChart) string {
-	if entry.IsLocal() {
+	switch {
+	case entry.IsLocal():
 		return "Local: " + filepath.Base(entry.LocalPath)
+	case entry.IsOCI():
+		return "OCI: " + entry.OciURL
+	default:
+		return entry.RepoName
 	}
-
-	return entry.RepoName
 }

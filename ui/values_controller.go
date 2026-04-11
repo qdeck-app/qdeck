@@ -11,12 +11,16 @@ import (
 	"time"
 
 	"gioui.org/app"
+	"gioui.org/layout"
 	"gioui.org/text"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
 	"gioui.org/x/explorer"
 	"gopkg.in/yaml.v3"
 
 	"github.com/qdeck-app/qdeck/config"
 	"github.com/qdeck-app/qdeck/domain"
+	gitadapter "github.com/qdeck-app/qdeck/infrastructure/git"
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/async"
 	"github.com/qdeck-app/qdeck/ui/page"
@@ -45,9 +49,10 @@ const (
 
 // filePickerResult bundles the path with context about which picker opened it.
 type filePickerResult struct {
-	path          string
-	isChartPicker bool
-	columnIdx     int
+	path           string
+	isChartPicker  bool
+	isValuesPicker bool
+	columnIdx      int
 }
 
 // ValuesController owns all values/column/render/save/recent-values concerns.
@@ -69,6 +74,7 @@ type ValuesController struct {
 	DefaultValuesRunner  *async.Runner[*service.FlatValues]
 	CustomValuesRunners  [state.MaxCustomColumns]*async.Runner[*service.FlatValues]
 	EditorParseRunners   [state.MaxCustomColumns]*async.Runner[*service.FlatValues]
+	GitCompareRunners    [state.MaxCustomColumns]*async.Runner[map[string]domain.GitChangeStatus]
 	RenderTemplateRunner *async.Runner[string]
 	ExportRunner         *async.Runner[string]
 	RecentValuesRunner   *async.Runner[[]domain.RecentValuesFile]
@@ -76,6 +82,13 @@ type ValuesController struct {
 
 	// OnOpenLocalChart is called when a chart file picker result is received.
 	OnOpenLocalChart func(path string)
+
+	// OnPendingValuesFileSelected is called when a values file picker on the repos page yields a result.
+	OnPendingValuesFileSelected func(path string)
+
+	// OnPendingValuesConsumed is called after a pending values file is auto-loaded,
+	// so the caller can record the values+chart pairing.
+	OnPendingValuesConsumed func(path string)
 
 	// pendingSave tracks the kind of save for the current ExportRunner operation.
 	// Safe to overwrite: ExportRunner.dispatch cancels prior ops, so pendingSave
@@ -85,6 +98,14 @@ type ValuesController struct {
 	chartSaveInFlight bool // true when ExportRunner was started by OnSaveChartVersion
 	viewerLink        *customwidget.ViewerLink
 	lastRenderMode    renderMode
+
+	// Overwrite confirmation dialog (shown when file changed on disk).
+	overwriteDialog       customwidget.ConfirmDialog
+	overwriteDialogYes    widget.Clickable
+	overwriteDialogNo     widget.Clickable
+	overwriteDialogActive bool
+	overwritePendingCol   int
+	overwritePendingYAML  string
 }
 
 func newValuesController(
@@ -121,7 +142,11 @@ func newValuesController(
 	for i := range vc.CustomValuesRunners {
 		vc.CustomValuesRunners[i] = async.NewRunner[*service.FlatValues](w, 1)
 		vc.EditorParseRunners[i] = async.NewRunner[*service.FlatValues](w, 1)
+		vc.GitCompareRunners[i] = async.NewRunner[map[string]domain.GitChangeStatus](w, 1)
 	}
+
+	vc.overwriteDialog.YesButton = &vc.overwriteDialogYes
+	vc.overwriteDialog.NoButton = &vc.overwriteDialogNo
 
 	return vc
 }
@@ -143,6 +168,7 @@ func (vc *ValuesController) Callbacks() page.ValuesPageCallbacks {
 		OnRenderDefaults:        vc.onRenderDefaults,
 		OnRenderOverrides:       vc.onRenderOverrides,
 		OnKeyCopied:             vc.onKeyCopied,
+		OnShowCommentsChanged:   vc.onShowCommentsChanged,
 	}
 }
 
@@ -152,6 +178,7 @@ func (vc *ValuesController) PollAsync() {
 	vc.pollDefaultValues()
 	vc.pollCustomValues()
 	vc.pollEditorParse()
+	vc.pollGitCompare()
 	vc.pollRecentValues()
 	vc.pollRenderRunner()
 	vc.pollExportRunner()
@@ -183,6 +210,17 @@ func (vc *ValuesController) pollDefaultValues() {
 				ed.Alignment = text.End
 				ed.SetText(entry.Value)
 			}
+
+			// Auto-load a values file queued from the repos page drop zone.
+			if vc.NavState.PendingValuesPath != "" {
+				path := vc.NavState.PendingValuesPath
+				vc.NavState.PendingValuesPath = ""
+				vc.OnColumnFilesSelected(0, []string{path})
+
+				if vc.OnPendingValuesConsumed != nil {
+					vc.OnPendingValuesConsumed(path)
+				}
+			}
 		}
 	}
 }
@@ -198,6 +236,42 @@ func (vc *ValuesController) pollCustomValues() {
 				col.CustomValues = res.Value
 
 				vc.populateColumnOverrides(i)
+				vc.triggerGitCompare(i)
+			}
+		}
+	}
+}
+
+func (vc *ValuesController) triggerGitCompare(colIdx int) {
+	col := &vc.State.Columns[colIdx]
+
+	// Only compare single-file columns; merged multi-file columns have ambiguous baselines.
+	if len(col.CustomFilePaths) != 1 {
+		col.GitChanges = nil
+
+		return
+	}
+
+	filePath := col.CustomFilePaths[0]
+
+	vc.GitCompareRunners[colIdx].RunWithTimeout(config.GitCompareOperation, func(ctx context.Context) (map[string]domain.GitChangeStatus, error) {
+		headContent, err := gitadapter.ShowHEAD(ctx, filePath)
+		if err != nil {
+			return nil, fmt.Errorf("git show HEAD for %s: %w", filePath, err)
+		}
+
+		return vc.ValuesService.CompareWithBaseline(ctx, filePath, headContent)
+	})
+}
+
+func (vc *ValuesController) pollGitCompare() {
+	for i := range vc.GitCompareRunners {
+		if res, ok := vc.GitCompareRunners[i].Poll(); ok {
+			if res.Err != nil {
+				// Silently skip — git not available or file untracked.
+				vc.State.Columns[i].GitChanges = nil
+			} else {
+				vc.State.Columns[i].GitChanges = res.Value
 			}
 		}
 	}
@@ -289,7 +363,12 @@ func (vc *ValuesController) pollExportRunner() {
 				col.ValuesModified = false
 				col.CustomFilePaths = []string{res.Value}
 
+				if info, err := os.Stat(res.Value); err == nil {
+					col.FileModTime = info.ModTime()
+				}
+
 				vc.State.RebuildHelmInstallCmd()
+				vc.triggerGitCompare(vc.saveColumnIdx)
 			}
 
 			vc.reRenderIfViewerOpen()
@@ -317,6 +396,10 @@ func (vc *ValuesController) pollFilePicker() {
 	case res.Value.isChartPicker:
 		if vc.OnOpenLocalChart != nil {
 			vc.OnOpenLocalChart(res.Value.path)
+		}
+	case res.Value.isValuesPicker:
+		if vc.OnPendingValuesFileSelected != nil {
+			vc.OnPendingValuesFileSelected(res.Value.path)
 		}
 	default:
 		vc.OnColumnFilesSelected(res.Value.columnIdx, []string{res.Value.path})
@@ -348,6 +431,7 @@ func (vc *ValuesController) ResetState() {
 	for i := range vc.CustomValuesRunners {
 		vc.CustomValuesRunners[i].Stop()
 		vc.EditorParseRunners[i].Stop()
+		vc.GitCompareRunners[i].Stop()
 	}
 
 	vc.pendingSave = saveNone
@@ -403,6 +487,10 @@ func (vc *ValuesController) OnColumnFilesSelected(colIdx int, paths []string) {
 	col.CustomFilePaths = paths
 	col.MergedFileCount = len(paths)
 
+	if info, err := os.Stat(paths[0]); err == nil {
+		col.FileModTime = info.ModTime()
+	}
+
 	vc.State.RebuildHelmInstallCmd()
 
 	vc.CustomValuesRunners[colIdx].RunWithTimeout(config.ValuesLoadOperation, func(ctx context.Context) (*service.FlatValues, error) {
@@ -454,6 +542,11 @@ func (vc *ValuesController) onOpenColumnFile(colIdx int) {
 
 func (vc *ValuesController) OnOpenChartFilePicker() {
 	vc.openFilePicker(filePickerResult{isChartPicker: true}, ".tgz", ".yaml", ".yml")
+}
+
+// OpenValuesFilePicker opens a file picker for values files on the repos page.
+func (vc *ValuesController) OpenValuesFilePicker() {
+	vc.openFilePicker(filePickerResult{isValuesPicker: true}, ".yaml", ".yml")
 }
 
 func (vc *ValuesController) onRevealColumnFile(colIdx int) {
@@ -552,13 +645,18 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 	if len(col.CustomFilePaths) > 0 {
 		path := col.CustomFilePaths[0]
 
-		vc.ExportRunner.RunWithTimeout(config.FileExportOperation, func(ctx context.Context) (string, error) {
-			if err := vc.ValuesService.SaveValuesFile(ctx, yamlText, path); err != nil {
-				return "", fmt.Errorf("save values: %w", err)
-			}
+		// Check if the file was modified externally since we loaded it.
+		if !col.FileModTime.IsZero() {
+			if info, err := os.Stat(path); err == nil && info.ModTime().After(col.FileModTime) {
+				vc.overwriteDialogActive = true
+				vc.overwritePendingCol = colIdx
+				vc.overwritePendingYAML = yamlText
 
-			return path, nil
-		})
+				return
+			}
+		}
+
+		vc.saveToFile(yamlText, path)
 
 		return
 	}
@@ -588,6 +686,59 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 	})
 }
 
+func (vc *ValuesController) saveToFile(yamlText, path string) {
+	vc.ExportRunner.RunWithTimeout(config.FileExportOperation, func(ctx context.Context) (string, error) {
+		if err := vc.ValuesService.SaveValuesFile(ctx, yamlText, path); err != nil {
+			return "", fmt.Errorf("save values: %w", err)
+		}
+
+		return path, nil
+	})
+}
+
+// IsOverwriteDialogActive reports whether the overwrite confirmation dialog is visible.
+func (vc *ValuesController) IsOverwriteDialogActive() bool {
+	return vc.overwriteDialogActive
+}
+
+// DismissOverwriteDialog hides the overwrite confirmation dialog without saving.
+func (vc *ValuesController) DismissOverwriteDialog() {
+	vc.overwriteDialogActive = false
+	vc.overwritePendingYAML = ""
+}
+
+// HandleOverwriteDialog processes confirm/cancel clicks on the overwrite-changes dialog.
+func (vc *ValuesController) HandleOverwriteDialog(gtx layout.Context) {
+	if !vc.overwriteDialogActive {
+		return
+	}
+
+	switch vc.overwriteDialog.Update(gtx) {
+	case customwidget.ConfirmYes:
+		vc.overwriteDialogActive = false
+
+		col := &vc.State.Columns[vc.overwritePendingCol]
+		if len(col.CustomFilePaths) > 0 {
+			vc.pendingSave = saveValues
+			vc.saveColumnIdx = vc.overwritePendingCol
+			vc.saveToFile(vc.overwritePendingYAML, col.CustomFilePaths[0])
+		}
+
+		vc.overwritePendingYAML = ""
+	case customwidget.ConfirmNo:
+		vc.DismissOverwriteDialog()
+	}
+}
+
+// LayoutOverwriteDialog renders the overwrite confirmation dialog if active.
+func (vc *ValuesController) LayoutOverwriteDialog(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	if !vc.overwriteDialogActive {
+		return layout.Dimensions{}
+	}
+
+	return vc.overwriteDialog.Layout(gtx, th, "This file has been modified externally. Overwrite changes?")
+}
+
 func (vc *ValuesController) onAddColumn() {
 	if vc.State.ColumnCount < state.MaxCustomColumns {
 		vc.State.ColumnCount++
@@ -601,6 +752,7 @@ func (vc *ValuesController) onClearColumn(colIdx int) {
 
 	vc.CustomValuesRunners[colIdx].Stop()
 	vc.EditorParseRunners[colIdx].Stop()
+	vc.GitCompareRunners[colIdx].Stop()
 	vc.State.Columns[colIdx].Reset()
 	vc.State.RebuildHelmInstallCmd()
 }
@@ -613,17 +765,20 @@ func (vc *ValuesController) onRemoveColumn(colIdx int) {
 	// Cancel in-flight work for the removed column.
 	vc.CustomValuesRunners[colIdx].Stop()
 	vc.EditorParseRunners[colIdx].Stop()
+	vc.GitCompareRunners[colIdx].Stop()
 
 	// Shift columns and their corresponding runners left.
 	for i := colIdx; i < state.MaxCustomColumns-1; i++ {
 		vc.State.Columns[i] = vc.State.Columns[i+1]
 		vc.CustomValuesRunners[i] = vc.CustomValuesRunners[i+1]
 		vc.EditorParseRunners[i] = vc.EditorParseRunners[i+1]
+		vc.GitCompareRunners[i] = vc.GitCompareRunners[i+1]
 	}
 
 	vc.State.Columns[state.MaxCustomColumns-1].Reset()
 	vc.CustomValuesRunners[state.MaxCustomColumns-1] = async.NewRunner[*service.FlatValues](vc.Window, 1)
 	vc.EditorParseRunners[state.MaxCustomColumns-1] = async.NewRunner[*service.FlatValues](vc.Window, 1)
+	vc.GitCompareRunners[state.MaxCustomColumns-1] = async.NewRunner[map[string]domain.GitChangeStatus](vc.Window, 1)
 	vc.State.ColumnCount--
 	vc.State.RebuildHelmInstallCmd()
 
@@ -828,4 +983,12 @@ func (vc *ValuesController) OnSaveChartVersion(chartName, version string) {
 
 		return vc.ChartService.SaveChartAsTarGz(ctx, chartPath)
 	})
+}
+
+func (vc *ValuesController) onShowCommentsChanged(show bool) {
+	go func() {
+		if err := vc.RecentService.SaveShowComments(context.Background(), show); err != nil {
+			slog.Error("save show comments preference", "error", err)
+		}
+	}()
 }

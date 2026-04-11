@@ -3,6 +3,7 @@ package state
 import (
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gioui.org/widget"
 
@@ -37,6 +38,9 @@ type CustomColumnState struct {
 	overrideFlags []bool
 	overrideCount int // number of true entries in overrideFlags
 
+	// File modification tracking
+	FileModTime time.Time // mod time recorded at load/save for external-change detection
+
 	// Modification tracking
 	ValuesModified bool
 	// DrainPendingChanges is set after a file load to signal that Layout should
@@ -54,6 +58,10 @@ type CustomColumnState struct {
 
 	// Editor parse error (shown when override YAML is invalid)
 	EditorParseError string
+
+	// GitChanges maps flat keys to their git change status (added/modified vs HEAD).
+	// nil when git comparison is not available or file is not tracked.
+	GitChanges map[string]domain.GitChangeStatus
 }
 
 // EnsureEditors grows the override editor slice only when data exceeds capacity.
@@ -123,9 +131,11 @@ func (c *CustomColumnState) Reset() {
 	c.CustomValues = nil
 	c.CustomFilePaths = c.CustomFilePaths[:0]
 	c.MergedFileCount = 0
+	c.FileModTime = time.Time{}
 	c.ValuesModified = false
 	c.FileDropActive = false
 	c.EditorParseError = ""
+	c.GitChanges = nil
 
 	for i := range c.OverrideEditors {
 		c.OverrideEditors[i].SetText("")
@@ -145,6 +155,8 @@ type ValuesPageState struct {
 	ChartPath           string
 	ChartName           string
 	RepoName            string
+	OciRef              string
+	Version             string
 	Loading             bool
 
 	// Multi-column override state
@@ -184,6 +196,7 @@ type ValuesPageState struct {
 	RenderDefaultsButton  widget.Clickable
 	RenderOverridesButton widget.Clickable
 	RenderLoading         bool
+	ShowComments          widget.Bool
 
 	// Helm install command (cached, rebuilt on chart/file changes)
 	HelmInstallCmd    string
@@ -252,10 +265,14 @@ func (s *ValuesPageState) EnsureRecentValuesClickables(count int) {
 func (s *ValuesPageState) RebuildHelmInstallCmd() {
 	var chartRef, releaseName string
 
-	if s.RepoName != "" {
+	switch {
+	case s.RepoName != "":
 		chartRef = s.RepoName + "/" + s.ChartName
 		releaseName = s.ChartName
-	} else {
+	case s.OciRef != "":
+		chartRef = s.OciRef + " --version " + s.Version
+		releaseName = s.ChartName
+	default:
 		chartRef = s.ChartPath
 		releaseName = filepath.Base(s.ChartPath)
 	}

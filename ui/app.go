@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gioui.org/app"
@@ -57,12 +59,14 @@ type Application struct {
 	navState state.NavigationState
 
 	// Async runners (repo/chart navigation)
-	repoListRunner     *async.Runner[[]domain.HelmRepository]
-	chartListRunner    *async.Runner[[]domain.Chart]
-	versionListRunner  *async.Runner[[]domain.ChartVersion]
-	pullChartRunner    *async.Runner[string]
-	localChartRunner   *async.Runner[service.LocalChartResult]
-	recentChartsRunner *async.Runner[[]domain.RecentChart]
+	repoListRunner            *async.Runner[[]domain.HelmRepository]
+	chartListRunner           *async.Runner[[]domain.Chart]
+	versionListRunner         *async.Runner[[]domain.ChartVersion]
+	pullChartRunner           *async.Runner[string]
+	localChartRunner          *async.Runner[service.LocalChartResult]
+	ociChartRunner            *async.Runner[service.OCIChartResult]
+	recentChartsRunner        *async.Runner[[]domain.RecentChart]
+	recentValuesEntriesRunner *async.Runner[[]domain.RecentValuesEntry]
 
 	// Notification
 	notificationState state.NotificationState
@@ -128,27 +132,36 @@ func NewApplication(
 	a.versionListRunner = async.NewRunner[[]domain.ChartVersion](w, 1)
 	a.pullChartRunner = async.NewRunner[string](w, 1)
 	a.localChartRunner = async.NewRunner[service.LocalChartResult](w, 1)
+	a.ociChartRunner = async.NewRunner[service.OCIChartResult](w, 1)
 	a.recentChartsRunner = async.NewRunner[[]domain.RecentChart](w, 1)
+	a.recentValuesEntriesRunner = async.NewRunner[[]domain.RecentValuesEntry](w, 1)
 
 	a.valuesCtrl = newValuesController(
 		w, &a.navState, &a.valuesState, &a.chartState, &a.notificationState,
 		expl, valuesSvc, templateSvc, recentSvc, chartSvc,
 	)
 	a.valuesCtrl.OnOpenLocalChart = a.onOpenLocalChart
+	a.valuesCtrl.OnPendingValuesFileSelected = a.onValuesFileDropped
+	a.valuesCtrl.OnPendingValuesConsumed = a.onPendingValuesConsumed
 
 	// Wire pages
 	a.reposPage = page.ReposPage{
-		Theme:                 th,
-		State:                 &a.repoState,
-		OnSelectRepo:          a.onSelectRepo,
-		OnAddRepo:             a.onAddRepo,
-		OnRemoveRepo:          a.onRemoveRepo,
-		OnRenameRepo:          a.onRenameRepo,
-		OnUpdateRepo:          a.onUpdateRepo,
-		OnOpenLocalChart:      a.onOpenLocalChart,
-		OnSelectRecentChart:   a.onSelectRecentChart,
-		OnRemoveRecentChart:   a.onRemoveRecentChart,
-		OnOpenChartFilePicker: a.valuesCtrl.OnOpenChartFilePicker,
+		Theme:                     th,
+		State:                     &a.repoState,
+		OnSelectRepo:              a.onSelectRepo,
+		OnAddRepo:                 a.onAddRepo,
+		OnRemoveRepo:              a.onRemoveRepo,
+		OnRenameRepo:              a.onRenameRepo,
+		OnUpdateRepo:              a.onUpdateRepo,
+		OnOpenLocalChart:          a.onOpenLocalChart,
+		OnSelectRecentChart:       a.onSelectRecentChart,
+		OnRemoveRecentChart:       a.onRemoveRecentChart,
+		OnOpenChartFilePicker:     a.valuesCtrl.OnOpenChartFilePicker,
+		OnDirectLinkSubmit:        a.onDirectLinkSubmit,
+		OnValuesFileDropped:       a.onValuesFileDropped,
+		OnOpenValuesFilePicker:    a.onOpenValuesFilePicker,
+		OnSelectRecentValuesEntry: a.onSelectRecentValuesEntry,
+		OnRemoveRecentValuesEntry: a.onRemoveRecentValuesEntry,
 	}
 	a.chartsPage = page.ChartsPage{
 		Theme:           th,
@@ -157,10 +170,13 @@ func NewApplication(
 		OnSelectVersion: a.onSelectVersion,
 		OnSaveChart:     a.valuesCtrl.OnSaveChartVersion,
 	}
+	a.loadShowComments()
+
 	a.valuesPage = page.NewValuesPage(th, &a.valuesState, a.valuesCtrl.Callbacks())
 
 	a.loadRepos()
 	a.loadRecentCharts()
+	a.loadRecentValuesEntries()
 
 	return a
 }
@@ -218,6 +234,12 @@ func (a *Application) pollExternalEvents() {
 			switch a.navState.CurrentPage {
 			case state.PageValues:
 				a.valuesCtrl.OnColumnFilesSelected(0, ev.Paths)
+			case state.PageRepos:
+				if int(ev.PositionY) >= a.repoState.ValuesSectionMinY && a.repoState.ValuesSectionMinY > 0 {
+					a.onValuesFileDropped(ev.Paths[0])
+				} else {
+					a.onOpenLocalChart(ev.Paths[0])
+				}
 			default:
 				a.onOpenLocalChart(ev.Paths[0])
 			}
@@ -265,6 +287,8 @@ func (a *Application) pollAsyncResults() {
 		a.valuesState.ChartPath = v
 		a.valuesState.ChartName = a.navState.SelectedChart
 		a.valuesState.RepoName = a.navState.SelectedRepo
+		a.valuesState.OciRef = ""
+		a.valuesState.Version = ""
 		a.valuesState.RebuildHelmInstallCmd()
 		a.valuesCtrl.LoadDefaultValues(v)
 	})
@@ -272,9 +296,16 @@ func (a *Application) pollAsyncResults() {
 	// Local chart loading
 	pollRunner(a.localChartRunner, &a.valuesState.Loading, &a.notificationState, a.applyLocalChartResult)
 
+	// OCI chart loading
+	pollRunner(a.ociChartRunner, &a.valuesState.Loading, &a.notificationState, a.applyOCIChartResult)
+
 	// Recent charts
 	pollRunner(a.recentChartsRunner, &a.repoState.Loading, &a.notificationState, func(v []domain.RecentChart) {
 		a.repoState.RecentCharts = v
+	})
+
+	pollRunner(a.recentValuesEntriesRunner, &a.repoState.Loading, &a.notificationState, func(v []domain.RecentValuesEntry) {
+		a.repoState.RecentValuesEntries = v
 	})
 
 	// Values controller polls its own runners.
@@ -291,6 +322,8 @@ func (a *Application) applyLocalChartResult(res service.LocalChartResult) {
 	a.valuesState.ChartPath = res.ChartPath
 	a.valuesState.ChartName = res.Name
 	a.valuesState.RepoName = ""
+	a.valuesState.OciRef = ""
+	a.valuesState.Version = ""
 	a.valuesState.RebuildHelmInstallCmd()
 	a.valuesCtrl.LoadDefaultValues(res.ChartPath)
 	a.addRecentChart(domain.RecentChart{
@@ -302,6 +335,7 @@ func (a *Application) applyLocalChartResult(res service.LocalChartResult) {
 const (
 	breadcrumbRootLabel    = "QDeck"
 	breadcrumbLocalLabel   = "Local"
+	breadcrumbOCILabel     = "OCI"
 	breadcrumbIdxRoot      = 0
 	breadcrumbIdxRepo      = 1
 	breadcrumbIdxChart     = 2
@@ -315,12 +349,15 @@ const (
 func (a *Application) layout(gtx layout.Context) layout.Dimensions {
 	a.handleKeyEvents(gtx)
 	a.handleUnsavedDialog(gtx)
+	a.valuesCtrl.HandleOverwriteDialog(gtx)
 
 	if clicked := a.breadcrumb.Clicked(gtx); clicked >= 0 {
 		a.onBreadcrumbClick(clicked)
 	}
 
 	a.updateBreadcrumb()
+
+	windowH := gtx.Constraints.Max.Y
 
 	return layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
@@ -332,6 +369,8 @@ func (a *Application) layout(gtx layout.Context) layout.Dimensions {
 					return a.notificationBar.Layout(gtx, a.theme, &a.notificationState)
 				}),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					a.repoState.PageContentTop = windowH - gtx.Constraints.Max.Y
+
 					switch a.navState.CurrentPage {
 					case state.PageCharts:
 						return a.chartsPage.Layout(gtx)
@@ -349,6 +388,9 @@ func (a *Application) layout(gtx layout.Context) layout.Dimensions {
 			}
 
 			return a.unsavedDialog.Layout(gtx, a.theme, "You have unsaved changes. Discard and leave?")
+		}),
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			return a.valuesCtrl.LayoutOverwriteDialog(gtx, a.theme)
 		}),
 	)
 }
@@ -405,7 +447,12 @@ func (a *Application) updateBreadcrumb() {
 
 	case state.PageValues:
 		if a.navState.IsLocalChart {
-			a.breadcrumb.Segments[breadcrumbIdxRepo].Label = breadcrumbLocalLabel
+			label := breadcrumbLocalLabel
+			if a.navState.IsOCIChart {
+				label = breadcrumbOCILabel
+			}
+
+			a.breadcrumb.Segments[breadcrumbIdxRepo].Label = label
 			a.breadcrumb.Segments[breadcrumbIdxChart].Label = a.navState.SelectedChart + "@" + a.navState.SelectedVersion
 			a.breadcrumb.Count = breadcrumbCountChart
 		} else {
@@ -430,10 +477,12 @@ func (a *Application) doBreadcrumbClick(segmentIdx int) {
 	case breadcrumbIdxRoot:
 		a.navState.CurrentPage = state.PageRepos
 		a.navState.ClearLocalChart()
+		a.navState.PendingValuesPath = ""
 	case breadcrumbIdxRepo:
 		if a.navState.IsLocalChart {
 			a.navState.CurrentPage = state.PageRepos
 			a.navState.ClearLocalChart()
+			a.navState.PendingValuesPath = ""
 		} else {
 			a.resetToChartList()
 		}
@@ -471,6 +520,8 @@ func (a *Application) handleKeyEvents(gtx layout.Context) {
 		switch {
 		case e.Name == key.NameEscape:
 			switch {
+			case a.valuesCtrl.IsOverwriteDialogActive():
+				a.valuesCtrl.DismissOverwriteDialog()
 			case a.unsavedDialogActive:
 				a.unsavedDialogActive = false
 				a.unsavedPending = pendingNone
@@ -538,6 +589,8 @@ func (a *Application) navigateBack() {
 func (a *Application) doNavigateBack() {
 	switch a.navState.CurrentPage {
 	case state.PageValues:
+		a.navState.PendingValuesPath = ""
+
 		if a.navState.IsLocalChart {
 			// Local charts have no version page — go straight to repos.
 			a.navState.ClearLocalChart()
@@ -629,6 +682,17 @@ func (a *Application) preloadCharts(repos []domain.HelmRepository) {
 	}()
 }
 
+func (a *Application) loadShowComments() {
+	show, err := a.recentService.LoadShowComments(context.Background())
+	if err != nil {
+		slog.Error("load show comments preference", "error", err)
+
+		return
+	}
+
+	a.valuesState.ShowComments.Value = show
+}
+
 func (a *Application) loadRecentCharts() {
 	a.recentChartsRunner.RunWithTimeout(config.RecentChartsLoadOperation, func(ctx context.Context) ([]domain.RecentChart, error) {
 		return a.recentService.ListRecentCharts(ctx)
@@ -643,6 +707,143 @@ func (a *Application) addRecentChart(entry domain.RecentChart) {
 		}
 
 		return a.recentService.ListRecentCharts(ctx)
+	})
+}
+
+func parseDirectLink(input string) (repo, chart, version string, ok bool) {
+	input = strings.TrimSpace(input)
+
+	repo, rest, found := strings.Cut(input, "/")
+	if !found || repo == "" {
+		return "", "", "", false
+	}
+
+	chart, version, found = strings.Cut(rest, ":")
+	if !found || chart == "" || version == "" {
+		return "", "", "", false
+	}
+
+	return repo, chart, version, true
+}
+
+const ociPrefix = "oci://"
+
+func isOCIRef(input string) bool {
+	return strings.HasPrefix(input, ociPrefix)
+}
+
+// parseOCIRef splits an OCI reference like "oci://registry.example.com/charts/nginx:1.2.0"
+// into the base ref ("oci://registry.example.com/charts/nginx") and version ("1.2.0").
+// Uses the last colon to correctly handle registry ports (e.g. "oci://host:5000/chart:1.0").
+func parseOCIRef(input string) (ociRef, version string, ok bool) {
+	input = strings.TrimSpace(input)
+
+	lastColon := strings.LastIndex(input, ":")
+	if lastColon < 0 {
+		return "", "", false
+	}
+
+	ref := input[:lastColon]
+	ver := input[lastColon+1:]
+
+	if ref == "" || ver == "" || !strings.HasPrefix(ref, ociPrefix) {
+		return "", "", false
+	}
+
+	return ref, ver, true
+}
+
+func (a *Application) onDirectLinkSubmit(text string) {
+	text = strings.TrimSpace(text)
+
+	if isOCIRef(text) {
+		a.onOpenOCIChart(text)
+
+		return
+	}
+
+	repo, chart, version, ok := parseDirectLink(text)
+	if !ok {
+		a.notificationState.Show(
+			"Invalid format. Use repo/chart:version or oci://registry/chart:version",
+			state.NotificationError,
+			time.Now(),
+		)
+
+		return
+	}
+
+	repoFound := false
+
+	for _, r := range a.repoState.Repos {
+		if r.Name == repo {
+			repoFound = true
+
+			break
+		}
+	}
+
+	if !repoFound {
+		a.notificationState.Show(
+			"Repository \""+repo+"\" is not configured. Add it first.",
+			state.NotificationError,
+			time.Now(),
+		)
+
+		return
+	}
+
+	a.navState.SelectedRepo = repo
+	a.onSelectVersion(chart, version)
+}
+
+func (a *Application) onOpenOCIChart(text string) {
+	ociRef, version, ok := parseOCIRef(text)
+	if !ok {
+		a.notificationState.Show(
+			"Invalid OCI format. Use oci://registry/chart:version",
+			state.NotificationError,
+			time.Now(),
+		)
+
+		return
+	}
+
+	chartName := filepath.Base(ociRef)
+	a.navState.SelectedChart = chartName
+	a.navState.SelectedVersion = version
+	a.navState.SelectedRepo = ""
+	a.navState.CurrentPage = state.PageValues
+	a.navState.ClearLocalChart()
+	a.navState.IsLocalChart = true
+	a.navState.IsOCIChart = true
+	a.valuesCtrl.ResetState()
+	a.ociChartRunner.RunWithTimeout(config.ChartPullOperation, func(ctx context.Context) (service.OCIChartResult, error) {
+		return a.chartService.PullOCIChart(ctx, ociRef, version)
+	})
+	a.valuesCtrl.LoadRecentValues()
+}
+
+func (a *Application) applyOCIChartResult(res service.OCIChartResult) {
+	a.navState.IsLocalChart = true
+	a.navState.IsOCIChart = true
+	a.navState.LocalChartPath = res.ChartPath
+	a.navState.LocalChartName = res.Name
+	a.navState.SelectedChart = res.Name
+	a.navState.SelectedVersion = res.Version
+	a.navState.CurrentPage = state.PageValues
+	a.valuesState.ChartPath = res.ChartPath
+	a.valuesState.ChartName = res.Name
+	a.valuesState.RepoName = ""
+	a.valuesState.OciRef = res.OciRef
+	a.valuesState.Version = res.Version
+	a.valuesState.RebuildHelmInstallCmd()
+	a.valuesCtrl.LoadDefaultValues(res.ChartPath)
+	a.addRecentChart(domain.RecentChart{
+		OciURL:      res.OciRef,
+		ChartName:   res.Name,
+		Version:     res.Version,
+		DisplayName: res.Name + "@" + res.Version + " (OCI)",
 	})
 }
 
@@ -729,11 +930,19 @@ func (a *Application) onOpenLocalChart(path string) {
 }
 
 func (a *Application) onSelectRecentChart(entry domain.RecentChart) {
-	if entry.IsLocal() {
-		a.onOpenLocalChart(entry.LocalPath)
-	} else {
-		a.navState.SelectedRepo = entry.RepoName
-		a.onSelectVersion(entry.ChartName, entry.Version)
+	a.openChartByRef(entry)
+}
+
+// openChartByRef routes to the correct chart handler based on chart source type.
+func (a *Application) openChartByRef(ref domain.RecentChart) {
+	switch {
+	case ref.IsLocal():
+		a.onOpenLocalChart(ref.LocalPath)
+	case ref.IsOCI():
+		a.onOpenOCIChart(ref.OciURL + ":" + ref.Version)
+	default:
+		a.navState.SelectedRepo = ref.RepoName
+		a.onSelectVersion(ref.ChartName, ref.Version)
 	}
 }
 
@@ -748,9 +957,80 @@ func (a *Application) onRemoveRecentChart(idx int) {
 	})
 }
 
+func (a *Application) onValuesFileDropped(path string) {
+	a.navState.PendingValuesPath = path
+	a.notificationState.Show(
+		"Values file queued: "+filepath.Base(path)+". Select a chart to continue.",
+		state.NotificationSuccess,
+		time.Now(),
+	)
+}
+
+func (a *Application) onOpenValuesFilePicker() {
+	a.valuesCtrl.OpenValuesFilePicker()
+}
+
+func (a *Application) onSelectRecentValuesEntry(entry domain.RecentValuesEntry) {
+	a.navState.PendingValuesPath = entry.ValuesPath
+	a.openChartByRef(entry.ChartRef())
+}
+
+//nolint:dupl // Structurally similar to onRemoveRecentChart but operates on different type.
+func (a *Application) onRemoveRecentValuesEntry(idx int) {
+	a.recentValuesEntriesRunner.RunWithTimeout(config.RecentValuesEntriesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesEntry, error) {
+		if err := a.recentService.RemoveRecentValuesEntry(ctx, idx); err != nil {
+			return nil, fmt.Errorf("remove recent values entry: %w", err)
+		}
+
+		return a.recentService.ListRecentValuesEntries(ctx)
+	})
+}
+
+func (a *Application) onPendingValuesConsumed(valuesPath string) {
+	entry := domain.RecentValuesEntry{
+		ValuesPath: valuesPath,
+	}
+
+	switch {
+	case a.navState.IsLocalChart:
+		entry.LocalPath = a.navState.LocalChartPath
+		entry.ChartDisplayName = a.navState.LocalChartName
+	case a.navState.IsOCIChart:
+		entry.OciURL = a.navState.LocalChartPath // OCI charts store the registry URL in LocalChartPath.
+		entry.ChartDisplayName = a.navState.LocalChartName
+		entry.Version = a.navState.SelectedVersion
+	default:
+		entry.RepoName = a.navState.SelectedRepo
+		entry.ChartName = a.navState.SelectedChart
+		entry.Version = a.navState.SelectedVersion
+		entry.ChartDisplayName = a.navState.SelectedChart + ":" + a.navState.SelectedVersion
+	}
+
+	a.addRecentValuesEntry(entry)
+}
+
+func (a *Application) loadRecentValuesEntries() {
+	a.recentValuesEntriesRunner.RunWithTimeout(config.RecentValuesEntriesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesEntry, error) {
+		return a.recentService.ListRecentValuesEntries(ctx)
+	})
+}
+
+//nolint:dupl // Structurally similar to addRecentChart but operates on different type.
+func (a *Application) addRecentValuesEntry(entry domain.RecentValuesEntry) {
+	a.recentValuesEntriesRunner.RunWithTimeout(config.RecentValuesEntriesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesEntry, error) {
+		if err := a.recentService.AddRecentValuesEntry(ctx, entry); err != nil {
+			return nil, fmt.Errorf("add recent values entry: %w", err)
+		}
+
+		return a.recentService.ListRecentValuesEntries(ctx)
+	})
+}
+
 func (a *Application) onBackToRepos() {
 	a.navState.CurrentPage = state.PageRepos
+	a.navState.PendingValuesPath = ""
 	a.loadRepos()
+	a.loadRecentValuesEntries()
 }
 
 func (a *Application) navigateToVersions() {

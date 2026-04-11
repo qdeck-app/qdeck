@@ -59,7 +59,9 @@ const (
 	dropZoneCompactThreshold unit.Dp = 250
 	headerSubDividerW        unit.Dp = 1 // matches overrideSubDividerW in overridetable.go
 
-	recentItemPadV unit.Dp = 2
+	recentItemPadV       unit.Dp = 2
+	showCommentsSize     unit.Dp = 18
+	showCommentsTextMult float32 = 0.85
 
 	maxRecentValues = 10 // must match service/recent_service.go
 
@@ -84,6 +86,7 @@ type ValuesPageCallbacks struct {
 	OnRenderDefaults        func()
 	OnRenderOverrides       func()
 	OnKeyCopied             func(key string)
+	OnShowCommentsChanged   func(show bool)
 }
 
 // ValuesPage renders the unified override editor: default values on the left,
@@ -173,6 +176,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	// Wire the table editors from column state.
 	p.Table.DefaultValueEditors = p.State.DefaultValueEditors
 	p.Table.ColumnCount = p.State.ColumnCount
+	p.Table.ShowComments = p.State.ShowComments.Value
 
 	for c := range p.State.ColumnCount {
 		p.Table.ColumnEditors[c] = p.State.Columns[c].OverrideEditors
@@ -822,7 +826,7 @@ func (p *ValuesPage) layoutRecentDropdownCard(gtx layout.Context) layout.Dimensi
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutPanelLabel(gtx, p.Theme, "Recent Values Files", 0, 0, valuesPaddingSmall)
+				return layoutPanelLabel(gtx, p.Theme, "Recent Values Files", 0, valuesPaddingSmall)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -908,6 +912,10 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		p.OnRenderOverrides()
 	}
 
+	if p.State.ShowComments.Update(gtx) && p.OnShowCommentsChanged != nil {
+		p.OnShowCommentsChanged(p.State.ShowComments.Value)
+	}
+
 	if p.State.CopyInstallButton.Clicked(gtx) && p.State.HelmInstallCmd != "" {
 		gtx.Execute(clipboard.WriteCmd{
 			Type: "text/plain",
@@ -923,7 +931,7 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		overridesHint := customwidget.ShortcutLabel("\u2318+2", "F4")
 
 		// defaults + overrides + loading + spacer + helm cmd + copy
-		const maxRenderChildren = 6
+		const maxRenderChildren = 7
 
 		var (
 			children [maxRenderChildren]layout.FlexChild
@@ -939,6 +947,17 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layoutRenderButton(gtx, p.Theme, &p.State.RenderOverridesButton,
 				renderOverridesLabelBase+" ("+overridesHint+")")
+		})
+		n++
+
+		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: valuesSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				cb := material.CheckBox(p.Theme, &p.State.ShowComments, "Show comments")
+				cb.Size = showCommentsSize
+				cb.TextSize = unit.Sp(float32(p.Theme.TextSize) * showCommentsTextMult)
+
+				return cb.Layout(gtx)
+			})
 		})
 		n++
 

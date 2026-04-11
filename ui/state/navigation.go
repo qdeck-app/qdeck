@@ -16,15 +16,21 @@ type NavigationState struct {
 	SelectedChart   string
 	SelectedVersion string
 
-	// Local chart support (skip charts page)
+	// Local/OCI chart support (skip charts page)
 	IsLocalChart   bool
+	IsOCIChart     bool
 	LocalChartPath string
 	LocalChartName string
+
+	// PendingValuesPath holds a values file dropped on the repos page.
+	// It is auto-loaded into column 0 when the user navigates to the values page.
+	PendingValuesPath string
 }
 
-// ClearLocalChart resets all local chart navigation fields.
+// ClearLocalChart resets all local and OCI chart navigation fields.
 func (n *NavigationState) ClearLocalChart() {
 	n.IsLocalChart = false
+	n.IsOCIChart = false
 	n.LocalChartPath = ""
 	n.LocalChartName = ""
 }
