@@ -5,6 +5,8 @@ package revealer
 import (
 	"context"
 	"os/exec"
+
+	"github.com/qdeck-app/qdeck/infrastructure/executil"
 )
 
 // revealFile opens Windows Explorer with the specified file selected.
@@ -15,6 +17,9 @@ func revealFile(path string) {
 	go func() {
 		defer cancel()
 
-		_ = exec.CommandContext(ctx, "explorer", `/select,`+path).Run() //nolint:gosec // Path is pre-validated by resolve(): Clean, Abs, EvalSymlinks.
+		cmd := exec.CommandContext(ctx, "explorer", `/select,`+path) //nolint:gosec // Path is pre-validated by resolve(): Clean, Abs, EvalSymlinks.
+		executil.HideWindow(cmd)
+
+		_ = cmd.Run()
 	}()
 }

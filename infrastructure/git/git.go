@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/qdeck-app/qdeck/infrastructure/executil"
 )
 
 // RepoRoot returns the git repository root for the directory containing filePath.
@@ -14,6 +16,7 @@ func RepoRoot(ctx context.Context, filePath string) (string, error) {
 	dir := filepath.Dir(filePath)
 
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel") //nolint:gosec // args are not user-controlled
+	executil.HideWindow(cmd)
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -45,6 +48,7 @@ func ShowHEAD(ctx context.Context, filePath string) ([]byte, error) {
 	relPath = filepath.ToSlash(relPath)
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "show", "HEAD:"+relPath) //nolint:gosec // args are not user-controlled
+	executil.HideWindow(cmd)
 
 	out, err := cmd.Output()
 	if err != nil {

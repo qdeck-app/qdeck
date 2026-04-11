@@ -20,6 +20,7 @@ import (
 
 	"github.com/qdeck-app/qdeck/config"
 	"github.com/qdeck-app/qdeck/domain"
+	"github.com/qdeck-app/qdeck/infrastructure/executil"
 	gitadapter "github.com/qdeck-app/qdeck/infrastructure/git"
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/async"
@@ -573,6 +574,8 @@ func (vc *ValuesController) onOpenInEditor(colIdx int) {
 	filePath := col.CustomFilePaths[0]
 
 	cmd := exec.CommandContext(context.Background(), "code", filePath) //nolint:gosec // user-selected file path, not untrusted input
+	executil.HideWindow(cmd)
+
 	if err := cmd.Start(); err != nil {
 		slog.Error("failed to open file in VS Code", "path", col.CustomFilePaths[0], "error", err)
 	}
