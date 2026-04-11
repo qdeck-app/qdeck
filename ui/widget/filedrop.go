@@ -84,7 +84,7 @@ func (z *FileDropZone) Layout(gtx layout.Context, th *material.Theme) layout.Dim
 			lbl := material.Body2(th, title)
 			lbl.Color = dropTitleColor
 
-			return lbl.Layout(gtx)
+			return LayoutLabel(gtx, lbl)
 		}))
 	}
 

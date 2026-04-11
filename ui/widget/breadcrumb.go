@@ -155,7 +155,7 @@ func (b *Breadcrumb) layoutSegment(gtx layout.Context, th *material.Theme, idx i
 		lbl := material.Body1(th, seg.Label)
 		lbl.Font.Weight = breadcrumbBoldWeight
 
-		return lbl.Layout(gtx)
+		return LayoutLabel(gtx, lbl)
 	}
 
 	// Clickable ancestor: record, paint hover bg, replay, register pointer.
@@ -166,7 +166,7 @@ func (b *Breadcrumb) layoutSegment(gtx layout.Context, th *material.Theme, idx i
 		lbl := material.Body1(th, seg.Label)
 		lbl.Color = theme.ColorAccent
 
-		return lbl.Layout(gtx)
+		return LayoutLabel(gtx, lbl)
 	})
 	c := m.Stop()
 
@@ -198,7 +198,7 @@ func (b *Breadcrumb) layoutSeparator(gtx layout.Context, th *material.Theme) lay
 		lbl := material.Body1(th, "/")
 		lbl.Color = theme.ColorMuted
 
-		return lbl.Layout(gtx)
+		return LayoutLabel(gtx, lbl)
 	})
 }
 

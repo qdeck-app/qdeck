@@ -139,7 +139,7 @@ func (s *SearchBar) Layout(gtx layout.Context, th *material.Theme, hint string) 
 			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				editor := material.Editor(th, s.Editor, hint)
 
-				return editor.Layout(gtx)
+				return LayoutEditor(gtx, th.Shaper, editor)
 			})
 		}),
 	)

@@ -8,7 +8,7 @@ import (
 	"gioui.org/font/opentype"
 )
 
-//go:embed FiraCode-Regular.ttf
+//go:embed FiraCode-Medium.ttf
 var writerRegularTTF []byte
 
 var (

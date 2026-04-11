@@ -655,7 +655,7 @@ func (v *viewerWindow) layoutFilePanel(gtx layout.Context, th *material.Theme) l
 				ed := material.Editor(th, &v.fileFilter, filterHint)
 				ed.TextSize = viewerEditorTextSize
 
-				return ed.Layout(gtx)
+				return LayoutEditor(gtx, th.Shaper, ed)
 			})
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -777,7 +777,7 @@ func (v *viewerWindow) layoutDirNode(
 			lbl.MaxLines = 1
 			lbl.Color = theme.ColorSecondary
 
-			return lbl.Layout(gtx)
+			return LayoutLabel(gtx, lbl)
 		}),
 	)
 }
@@ -795,7 +795,7 @@ func (v *viewerWindow) layoutFileNode(
 		lbl.Color = theme.ColorAccent
 	}
 
-	return lbl.Layout(gtx)
+	return LayoutLabel(gtx, lbl)
 }
 
 func (v *viewerWindow) layoutSearchRow(gtx layout.Context, th *material.Theme) layout.Dimensions {
@@ -831,7 +831,7 @@ func (v *viewerWindow) layoutSearchRow(gtx layout.Context, th *material.Theme) l
 						lbl := material.Caption(th, "Esc \u2715")
 						lbl.Color = theme.ColorMuted
 
-						return lbl.Layout(gtx)
+						return LayoutLabel(gtx, lbl)
 					})
 			}),
 		)
@@ -860,7 +860,7 @@ func (v *viewerWindow) layoutActionButton(
 				lbl.Color = theme.ColorAccentHover
 			}
 
-			return lbl.Layout(gtx)
+			return LayoutLabel(gtx, lbl)
 		})
 	})
 
@@ -905,7 +905,7 @@ func (v *viewerWindow) layoutSearchInput(gtx layout.Context, th *material.Theme)
 				ed := material.Editor(th, &v.searchEditor, searchHint)
 				ed.TextSize = viewerEditorTextSize
 
-				return ed.Layout(gtx)
+				return LayoutEditor(gtx, th.Shaper, ed)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return v.layoutMatchCount(gtx, th)
@@ -1001,7 +1001,7 @@ func (v *viewerWindow) layoutContent(gtx layout.Context, th *material.Theme) lay
 			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				lbl := material.Body2(th, v.lines[index])
 
-				return lbl.Layout(gtx)
+				return LayoutLabel(gtx, lbl)
 			})
 
 			c := m.Stop()

@@ -82,7 +82,7 @@ func (n *NotificationBar) Layout(gtx layout.Context, th *material.Theme, notif *
 			lbl.Color = textColor
 
 			m := op.Record(gtx.Ops)
-			lblDims := lbl.Layout(gtx)
+			lblDims := LayoutLabel(gtx, lbl)
 			lblCall := m.Stop()
 
 			// Size cursor to text line height minus half the descent for visual balance.

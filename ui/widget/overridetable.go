@@ -284,7 +284,7 @@ func (t *OverrideTable) layoutRow(
 								lbl := material.Caption(t.Theme, entry.Comment)
 								lbl.Color = theme.ColorMuted
 
-								return lbl.Layout(gtx)
+								return LayoutLabel(gtx, lbl)
 							})
 					})
 			}),
@@ -309,7 +309,7 @@ func (t *OverrideTable) layoutRow(
 											lbl := material.Body2(t.Theme, displayKey)
 											lbl.MaxLines = 1
 
-											return lbl.Layout(gtx)
+											return LayoutLabel(gtx, lbl)
 										})
 									}),
 									layout.Flexed(overrideValueProportion, func(gtx layout.Context) layout.Dimensions {
@@ -317,10 +317,7 @@ func (t *OverrideTable) layoutRow(
 											return layout.Dimensions{}
 										}
 
-										ed := material.Editor(t.Theme, &t.DefaultValueEditors[entryIdx], "")
-										ed.TextSize = viewerEditorTextSize
-
-										return ed.Layout(gtx)
+										return layoutDefaultValue(gtx, t.Theme, &t.DefaultValueEditors[entryIdx])
 									}),
 								)
 							})
@@ -450,7 +447,7 @@ func (t *OverrideTable) layoutRightColumns(
 						// return valid positions; then guides paint underneath, and
 						// the recorded editor ops replay on top.
 						macro := op.Record(gtx.Ops)
-						dims := ed.Layout(gtx)
+						dims := LayoutEditor(gtx, t.Theme.Shaper, ed)
 						editorCall := macro.Stop()
 
 						t.drawIndentGuides(gtx, edText, &editors[entryIdx], indent)
@@ -459,7 +456,7 @@ func (t *OverrideTable) layoutRightColumns(
 						return dims
 					}
 
-					return ed.Layout(gtx)
+					return LayoutEditor(gtx, t.Theme.Shaper, ed)
 				})
 		})
 		n++
@@ -802,7 +799,7 @@ func (t *OverrideTable) layoutStickyHeader(gtx layout.Context, parent string) la
 				lbl.Color = theme.ColorSecondary
 				lbl.MaxLines = 1
 
-				return lbl.Layout(gtx)
+				return LayoutLabel(gtx, lbl)
 			})
 		}),
 	)
@@ -810,6 +807,37 @@ func (t *OverrideTable) layoutStickyHeader(gtx layout.Context, parent string) la
 
 // indentGuide describes one vertical guide line: its indent level and
 // the range of text lines it spans.
+// layoutDefaultValue renders a read-only default value using our label
+// renderer (256-glyph batch) for correct anti-aliasing.
+func layoutDefaultValue(gtx layout.Context, th *material.Theme, editor *widget.Editor) layout.Dimensions {
+	// Render crisp text with our pixel-snapped label renderer.
+	lbl := material.Body2(th, editor.Text())
+	lbl.TextSize = viewerEditorTextSize
+	lbl.Alignment = editor.Alignment
+
+	m := op.Record(gtx.Ops)
+	lblDims := LayoutLabel(gtx, lbl)
+	lblCall := m.Stop()
+
+	// Overlay a transparent editor to preserve text selection and copy.
+	ed := material.Editor(th, editor, "")
+	ed.TextSize = viewerEditorTextSize
+	ed.Color = theme.ColorTransparent
+	ed.Editor.SingleLine = false
+
+	edM := op.Record(gtx.Ops)
+	edDims := LayoutEditor(gtx, th.Shaper, ed)
+	edCall := edM.Stop()
+
+	lblCall.Add(gtx.Ops)
+	edCall.Add(gtx.Ops)
+
+	return layout.Dimensions{
+		Size:     image.Pt(max(lblDims.Size.X, edDims.Size.X), max(lblDims.Size.Y, edDims.Size.Y)),
+		Baseline: edDims.Baseline,
+	}
+}
+
 type indentGuide struct {
 	level     int // indent depth (1-based)
 	firstLine int // first text line at this depth (0-based)

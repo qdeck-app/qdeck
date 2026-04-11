@@ -90,7 +90,7 @@ func (d *ConfirmDialog) Layout(gtx layout.Context, th *material.Theme, message s
 				return layout.UniformInset(dialogPadding).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return material.Body1(th, message).Layout(gtx)
+							return LayoutLabel(gtx, material.Body1(th, message))
 						}),
 						layout.Rigid(layout.Spacer{Height: dialogButtonSpacing}.Layout),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {

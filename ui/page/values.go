@@ -160,7 +160,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		}
 
 		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return material.Body1(p.Theme, "No chart selected").Layout(gtx)
+			return customwidget.LayoutLabel(gtx, material.Body1(p.Theme, "No chart selected"))
 		})
 	}
 
@@ -338,7 +338,7 @@ func (p *ValuesPage) layoutParseErrors(gtx layout.Context) layout.Dimensions {
 					lbl := material.Caption(p.Theme, errMsg)
 					lbl.Color = theme.ColorError
 
-					return lbl.Layout(gtx)
+					return customwidget.LayoutLabel(gtx, lbl)
 				})
 		})
 		n++
@@ -402,14 +402,14 @@ func (p *ValuesPage) layoutColumnHeaders(gtx layout.Context) layout.Dimensions {
 									lbl := material.Body2(p.Theme, "Key")
 									lbl.Font.Weight = valuesHeaderWeight
 
-									return lbl.Layout(gtx)
+									return customwidget.LayoutLabel(gtx, lbl)
 								}),
 								layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions { //nolint:mnd // value proportion
 									lbl := material.Body2(p.Theme, "Default Value")
 									lbl.Font.Weight = valuesHeaderWeight
 									lbl.Alignment = text.End
 
-									return lbl.Layout(gtx)
+									return customwidget.LayoutLabel(gtx, lbl)
 								}),
 							)
 						})
@@ -675,7 +675,7 @@ func (p *ValuesPage) layoutColumnFileStatus(gtx layout.Context, colIdx int) layo
 					lbl.Font.Weight = valuesHeaderWeight
 					lbl.MaxLines = 1
 
-					return lbl.Layout(gtx)
+					return customwidget.LayoutLabel(gtx, lbl)
 				}
 
 				return layoutClickablePointer(gtx, &col.FileNameButton,
@@ -684,7 +684,7 @@ func (p *ValuesPage) layoutColumnFileStatus(gtx layout.Context, colIdx int) layo
 						lbl.Font.Weight = valuesHeaderWeight
 						lbl.MaxLines = 1
 
-						return lbl.Layout(gtx)
+						return customwidget.LayoutLabel(gtx, lbl)
 					})
 			})
 	})
@@ -881,7 +881,7 @@ func (p *ValuesPage) recentDropdownItems() []layout.FlexChild {
 									lbl.Color = theme.ColorAccent
 									lbl.MaxLines = 1
 
-									return lbl.Layout(gtx)
+									return customwidget.LayoutLabel(gtx, lbl)
 								}),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									return layoutActionButton(gtx, p.Theme,
@@ -976,7 +976,7 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 					lbl := material.Caption(p.Theme, "Rendering...")
 					lbl.Color = theme.ColorSecondary
 
-					return lbl.Layout(gtx)
+					return customwidget.LayoutLabel(gtx, lbl)
 				})
 			})
 			n++
@@ -998,7 +998,7 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 				lbl.Color = theme.ColorSecondary
 				lbl.MaxLines = 1
 
-				return lbl.Layout(gtx)
+				return customwidget.LayoutLabel(gtx, lbl)
 			})
 			n++
 
@@ -1034,7 +1034,7 @@ func layoutRenderButton(
 					lbl := material.Body2(th, label)
 					lbl.Color = theme.ColorAccent
 
-					return lbl.Layout(gtx)
+					return customwidget.LayoutLabel(gtx, lbl)
 				}),
 				layout.Rigid(layout.Spacer{Width: renderIconSpacing}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {

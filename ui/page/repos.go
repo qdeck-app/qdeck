@@ -283,12 +283,12 @@ func (p *ReposPage) layoutRecentValuesEntries(gtx layout.Context) layout.Dimensi
 					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-								layout.Rigid(material.Body2(p.Theme, filepath.Base(entry.ValuesPath)).Layout),
+								layout.Rigid(customwidget.LabelWidget(material.Body2(p.Theme, filepath.Base(entry.ValuesPath)))),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									lbl := material.Caption(p.Theme, entry.ChartDisplayName)
 									lbl.Color = theme.ColorSecondary
 
-									return lbl.Layout(gtx)
+									return customwidget.LayoutLabel(gtx, lbl)
 								}),
 							)
 						}),
@@ -353,13 +353,13 @@ func (p *ReposPage) layoutRecentChartItems(gtx layout.Context) layout.Dimensions
 					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-								layout.Rigid(material.Body2(p.Theme, entry.DisplayName).Layout),
+								layout.Rigid(customwidget.LabelWidget(material.Body2(p.Theme, entry.DisplayName))),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									subtitle := recentSubtitle(entry)
 									lbl := material.Caption(p.Theme, subtitle)
 									lbl.Color = theme.ColorSecondary
 
-									return lbl.Layout(gtx)
+									return customwidget.LayoutLabel(gtx, lbl)
 								}),
 							)
 						}),
@@ -416,7 +416,7 @@ func (p *ReposPage) layoutAddRepoRow(gtx layout.Context) layout.Dimensions {
 					lbl := material.Body2(p.Theme, label)
 					lbl.Color = theme.ColorAccent
 
-					return lbl.Layout(gtx)
+					return customwidget.LayoutLabel(gtx, lbl)
 				})
 			})
 	})
@@ -582,12 +582,12 @@ func (p *ReposPage) layoutRepoList(gtx layout.Context) layout.Dimensions {
 						// Body1 for repos (primary items) vs Body2 for recent charts (secondary).
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-								layout.Rigid(material.Body1(p.Theme, repo.Name).Layout),
+								layout.Rigid(customwidget.LabelWidget(material.Body1(p.Theme, repo.Name))),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									lbl := material.Caption(p.Theme, repo.URL)
 									lbl.Color = theme.ColorSecondary
 
-									return lbl.Layout(gtx)
+									return customwidget.LayoutLabel(gtx, lbl)
 								}),
 							)
 						}),

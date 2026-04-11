@@ -16,6 +16,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"gioui.org/x/explorer"
@@ -364,6 +365,11 @@ const (
 )
 
 func (a *Application) layout(gtx layout.Context) layout.Dimensions {
+	// Fill the window with an opaque white background so that text anti-aliasing
+	// composites against a solid backdrop on all platforms (fixes grey text
+	// artefacts on Linux where the framebuffer starts transparent).
+	paint.Fill(gtx.Ops, theme.ColorWhite)
+
 	a.handleKeyEvents(gtx)
 	a.handleUnsavedDialog(gtx)
 	a.valuesCtrl.HandleOverwriteDialog(gtx)

@@ -76,7 +76,7 @@ func layoutCenteredLoading(gtx layout.Context, th *material.Theme) layout.Dimens
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return material.Body1(th, "Loading...").Layout(gtx)
+				return customwidget.LayoutLabel(gtx, material.Body1(th, "Loading..."))
 			}),
 			layout.Rigid(layout.Spacer{Height: loadingBarSpacing}.Layout),
 			layout.Rigid(layoutLoadingBar),
@@ -137,7 +137,9 @@ func layoutEditorField(gtx layout.Context, th *material.Theme, editor *widget.Ed
 		dims := layout.Inset{
 			Left: editorFieldPadH, Right: editorFieldPadH,
 			Top: editorFieldPadV, Bottom: editorFieldPadV,
-		}.Layout(gtx, ed.Layout)
+		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return customwidget.LayoutEditor(gtx, th.Shaper, ed)
+		})
 		c := m.Stop()
 
 		bounds := image.Rectangle{Max: dims.Size}
@@ -304,7 +306,7 @@ func layoutHorizontalSeparator(gtx layout.Context, left, right unit.Dp) layout.D
 
 func layoutPanelLabel(gtx layout.Context, th *material.Theme, text string, top, bottom unit.Dp) layout.Dimensions {
 	return layout.Inset{Top: top, Bottom: bottom}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return material.Body2(th, text).Layout(gtx)
+		return customwidget.LayoutLabel(gtx, material.Body2(th, text))
 	})
 }
 
