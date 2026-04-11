@@ -916,6 +916,10 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		p.OnShowCommentsChanged(p.State.ShowComments.Value)
 	}
 
+	if p.State.SaveChartButton.Clicked(gtx) && p.OnSaveChart != nil {
+		p.OnSaveChart()
+	}
+
 	if p.State.CopyInstallButton.Clicked(gtx) && p.State.HelmInstallCmd != "" {
 		gtx.Execute(clipboard.WriteCmd{
 			Type: "text/plain",
@@ -930,8 +934,8 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		defaultsHint := customwidget.ShortcutLabel("\u2318+1", "F3")
 		overridesHint := customwidget.ShortcutLabel("\u2318+2", "F4")
 
-		// defaults + overrides + loading + spacer + helm cmd + copy
-		const maxRenderChildren = 7
+		// defaults + overrides + show-comments + loading + save + spacer + helm cmd + copy
+		const maxRenderChildren = 8
 
 		var (
 			children [maxRenderChildren]layout.FlexChild
@@ -947,6 +951,11 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layoutRenderButton(gtx, p.Theme, &p.State.RenderOverridesButton,
 				renderOverridesLabelBase+" ("+overridesHint+")")
+		})
+		n++
+
+		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return LayoutTextButton(gtx, p.Theme, &p.State.SaveChartButton, "Save .tgz", valuesSpacing)
 		})
 		n++
 

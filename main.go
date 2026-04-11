@@ -4,6 +4,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"runtime"
 
 	"gioui.org/app"
 	"gioui.org/unit"
@@ -41,7 +42,14 @@ func main() {
 		w.Option(app.Title("QDeck - Helm Values Editor"))
 		w.Option(app.Size(unit.Dp(defaultWindowWidth), unit.Dp(defaultWindowHeight)))
 
-		application := ui.NewApplication(w, repoSvc, chartSvc, valuesSvc, recentSvc, templateSvc)
+		// On Linux and Windows, disable compositor decorations and draw our own
+		// window control buttons in the breadcrumb bar.
+		customDecor := runtime.GOOS == "linux" || runtime.GOOS == "windows"
+		if customDecor {
+			w.Option(app.Decorated(false))
+		}
+
+		application := ui.NewApplication(w, repoSvc, chartSvc, valuesSvc, recentSvc, templateSvc, customDecor)
 		if err := application.Run(); err != nil {
 			log.Fatal(err)
 		}

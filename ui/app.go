@@ -99,6 +99,13 @@ type Application struct {
 	unsavedPending      pendingAction
 	unsavedBreadcrumb   int // breadcrumb segment index when pendingBreadcrumb
 
+	// Custom window decorations (used when the platform cannot provide
+	// server-side decorations, e.g. Wayland without xdg-decoration).
+	// When enabled, the breadcrumb bar acts as a drag handle and
+	// window control buttons appear on its right side.
+	customDecor bool
+	winButtons  customwidget.WinButtons
+
 	// ops reused across frames
 	ops op.Ops
 }
@@ -110,6 +117,7 @@ func NewApplication(
 	valuesSvc *service.ValuesService,
 	recentSvc *service.RecentService,
 	templateSvc *service.TemplateService,
+	customDecor bool,
 ) *Application {
 	th := theme.NewTheme()
 
@@ -124,7 +132,10 @@ func NewApplication(
 		repoService:   repoSvc,
 		chartService:  chartSvc,
 		recentService: recentSvc,
+		customDecor:   customDecor,
 	}
+
+	a.breadcrumb.MoveArea = customDecor
 
 	// Initialize async runners (repo/chart navigation)
 	a.repoListRunner = async.NewRunner[[]domain.HelmRepository](w, 1)
@@ -195,6 +206,8 @@ func (a *Application) Run() error {
 		switch e := e.(type) {
 		case app.DestroyEvent:
 			return e.Err
+		case app.ConfigEvent:
+			a.handleConfigEvent(e)
 		case app.FrameEvent:
 			gtx := app.NewContext(&a.ops, e)
 			a.pollExternalEvents()
@@ -203,6 +216,10 @@ func (a *Application) Run() error {
 			e.Frame(gtx.Ops)
 		}
 	}
+}
+
+func (a *Application) handleConfigEvent(e app.ConfigEvent) {
+	a.winButtons.Maximized = e.Config.Mode == app.Maximized
 }
 
 func (a *Application) pollExternalEvents() {
@@ -412,20 +429,45 @@ func (a *Application) handleUnsavedDialog(gtx layout.Context) {
 }
 
 func (a *Application) layoutBreadcrumbRow(gtx layout.Context) layout.Dimensions {
-	showSave := a.navState.CurrentPage == state.PageValues &&
-		a.valuesState.ChartPath != "" && !a.valuesState.Loading && a.valuesState.DefaultValues != nil
+	a.handleWinButtonClicks(gtx)
 
-	if !showSave {
+	if !a.customDecor {
 		return a.breadcrumb.Layout(gtx, a.theme)
 	}
 
-	if a.valuesState.SaveChartButton.Clicked(gtx) && a.valuesPage.OnSaveChart != nil {
-		a.valuesPage.OnSaveChart()
+	return a.breadcrumb.LayoutWithAction(gtx, a.theme, func(gtx layout.Context) layout.Dimensions {
+		return a.winButtons.Layout(gtx)
+	})
+}
+
+func (a *Application) handleWinButtonClicks(gtx layout.Context) {
+	if !a.customDecor {
+		return
 	}
 
-	return a.breadcrumb.LayoutWithAction(gtx, a.theme, func(gtx layout.Context) layout.Dimensions {
-		return page.LayoutCompactTextButton(gtx, a.theme, &a.valuesState.SaveChartButton, "Save .tgz")
-	})
+	if a.breadcrumb.MoveDoubleClicked(gtx.Source) {
+		a.toggleMaximize()
+	}
+
+	if a.winButtons.Minimize.Clicked(gtx) {
+		a.window.Perform(system.ActionMinimize)
+	}
+
+	if a.winButtons.Maximize.Clicked(gtx) {
+		a.toggleMaximize()
+	}
+
+	if a.winButtons.Close.Clicked(gtx) {
+		a.window.Perform(system.ActionClose)
+	}
+}
+
+func (a *Application) toggleMaximize() {
+	if a.winButtons.Maximized {
+		a.window.Perform(system.ActionUnmaximize)
+	} else {
+		a.window.Perform(system.ActionMaximize)
+	}
 }
 
 func (a *Application) updateBreadcrumb() {
