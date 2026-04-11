@@ -33,11 +33,19 @@ Prerequisites:
 ```bash
 # build binary
 # on macOS you may need CC=/usr/bin/clang explicitly
-go run . 
+go run .
 
 # lint
 golangci-lint run --fix
 ```
+
+### Linux Text Rendering
+
+Gio's GPU text renderer produces grey/fuzzy text on Linux (Mesa OpenGL) due to three framework-level issues: transparent framebuffer compositing, gamma-incorrect alpha blending ([gio#70](https://todo.sr.ht/~eliasnaur/gio/70)), and a 32-glyph batch boundary that creates visible vertical seams with monospace fonts. These do not reproduce on macOS (Metal) or Windows (Direct3D 11) because their GPU rasterisers handle sub-pixel positioning deterministically.
+
+Workaround applied:
+
+- **Custom label/editor renderer** (`ui/widget/label.go`) with a 256-glyph buffer and integer pixel-grid snapping — all text must be rendered through `widget.LayoutLabel` / `widget.LayoutEditor`, never via Gio's `lbl.Layout(gtx)` directly
 
 ## License
 
@@ -45,6 +53,6 @@ Copyright © 2026 bosiakov
 
 Licensed under MIT (see [LICENSE](LICENSE)).
 
-The font `ui/font/FiraCode-Regular.ttf` is licensed under the OFL-1.1. See [ui/font/LICENSE](ui/font/LICENSE) for details.
+The font `ui/font/FiraCode-Medium.ttf` is licensed under the OFL-1.1. See [ui/font/LICENSE](ui/font/LICENSE) for details.
 
 All fonts are legally licensed to Yauheni Basiakou via MyFonts.

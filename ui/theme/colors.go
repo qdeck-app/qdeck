@@ -25,6 +25,7 @@ var (
 	ColorInputBorder  = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
 	ColorTextPrimary  = color.NRGBA{A: 255}
 	ColorWhite        = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	ColorTransparent  = color.NRGBA{}
 
 	// Custom window decoration button colors (dark toolbar style).
 	ColorContrastBg = color.NRGBA{R: 80, G: 80, B: 85, A: 255}

@@ -75,7 +75,7 @@ func (p *ChartsPage) layoutSearch(gtx layout.Context) layout.Dimensions {
 		ed := material.Editor(p.Theme, &p.State.SearchEditor, hint)
 		ed.Editor.SingleLine = true
 
-		return ed.Layout(gtx)
+		return customwidget.LayoutEditor(gtx, p.Theme.Shaper, ed)
 	})
 }
 
@@ -138,13 +138,13 @@ func (p *ChartsPage) layoutChartList(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-								layout.Rigid(material.Body1(p.Theme, chart.Name).Layout),
+								layout.Rigid(customwidget.LabelWidget(material.Body1(p.Theme, chart.Name))),
 								layout.Rigid(layout.Spacer{Width: chartSpacerSmall}.Layout),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									lbl := material.Caption(p.Theme, chart.LatestVersion())
 									lbl.Color = theme.ColorAccent
 
-									return lbl.Layout(gtx)
+									return customwidget.LayoutLabel(gtx, lbl)
 								}),
 							)
 						}),
@@ -153,7 +153,7 @@ func (p *ChartsPage) layoutChartList(gtx layout.Context) layout.Dimensions {
 							lbl.Color = theme.ColorSecondary
 							lbl.MaxLines = 2
 
-							return lbl.Layout(gtx)
+							return customwidget.LayoutLabel(gtx, lbl)
 						}),
 					)
 				})
@@ -205,16 +205,16 @@ func (p *ChartsPage) layoutVersions(gtx layout.Context) layout.Dimensions {
 								func(gtx layout.Context) layout.Dimensions {
 									return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 										layout.Flexed(chartVersionFlex, func(gtx layout.Context) layout.Dimensions {
-											return material.Body1(p.Theme, ver.Version).Layout(gtx)
+											return customwidget.LayoutLabel(gtx, material.Body1(p.Theme, ver.Version))
 										}),
 										layout.Flexed(chartVersionFlex, func(gtx layout.Context) layout.Dimensions {
-											return material.Body2(p.Theme, "App: "+ver.AppVersion).Layout(gtx)
+											return customwidget.LayoutLabel(gtx, material.Body2(p.Theme, "App: "+ver.AppVersion))
 										}),
 										layout.Flexed(chartVersionFlex, func(gtx layout.Context) layout.Dimensions {
 											lbl := material.Caption(p.Theme, ver.Created.Format(chartDateFormat))
 											lbl.Color = theme.ColorSecondary
 
-											return lbl.Layout(gtx)
+											return customwidget.LayoutLabel(gtx, lbl)
 										}),
 									)
 								})
