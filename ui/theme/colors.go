@@ -24,6 +24,11 @@ var (
 	ColorBtnCancel    = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
 	ColorInputBorder  = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
 	ColorTextPrimary  = color.NRGBA{A: 255}
+	ColorWhite        = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+
+	// Custom window decoration button colors (dark toolbar style).
+	ColorContrastBg = color.NRGBA{R: 80, G: 80, B: 85, A: 255}
+	ColorContrastFg = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 
 	// Git change highlights for values table (pastel row backgrounds).
 	ColorGitAdded    = color.NRGBA{R: 200, G: 235, B: 200, A: 255}
