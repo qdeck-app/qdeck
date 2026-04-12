@@ -152,6 +152,7 @@ func NewApplication(
 		w, &a.navState, &a.valuesState, &a.chartState, &a.notificationState,
 		expl, valuesSvc, templateSvc, recentSvc, chartSvc,
 	)
+	a.valuesCtrl.CustomDecor = customDecor
 	a.valuesCtrl.OnOpenLocalChart = a.onOpenLocalChart
 	a.valuesCtrl.OnPendingValuesFileSelected = a.onValuesFileDropped
 	a.valuesCtrl.OnPendingValuesConsumed = a.onPendingValuesConsumed
