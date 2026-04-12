@@ -241,6 +241,46 @@ func layoutActionButton(
 	})
 }
 
+// layoutIconTextButton renders a clickable button with a leading icon widget, spacing, and label text.
+func layoutIconTextButton(
+	gtx layout.Context, th *material.Theme, click *widget.Clickable,
+	label string, left unit.Dp, icon layout.Widget,
+) layout.Dimensions {
+	return layout.Inset{Left: left}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		hovered := click.Hovered()
+
+		m := op.Record(gtx.Ops)
+
+		dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{
+				Left: textBtnPaddingH, Right: textBtnPaddingH,
+				Top: textBtnPaddingV, Bottom: textBtnPaddingV,
+			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(icon),
+					layout.Rigid(layout.Spacer{Width: renderIconSpacing}.Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Body2(th, label)
+						lbl.Color = theme.ColorAccent
+
+						return customwidget.LayoutLabel(gtx, lbl)
+					}),
+				)
+			})
+		})
+
+		c := m.Stop()
+
+		paintHoverBg(gtx, dims, hovered)
+
+		c.Add(gtx.Ops)
+
+		pushPointerCursor(gtx, dims, click)
+
+		return dims
+	})
+}
+
 // layoutClickablePointer wraps a Clickable layout with a pointer hand cursor
 // and a hover background highlight.
 // Uses a PassOp overlay so the cursor takes precedence over the parent list's

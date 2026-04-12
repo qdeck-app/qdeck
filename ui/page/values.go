@@ -43,6 +43,7 @@ const (
 	renderDefaultsLabelBase          = "Render with default values" //nolint:goconst // render label base
 	renderOverridesLabelBase         = "Render with all overrides"  //nolint:goconst // render label base
 	renderPlayIconSize       unit.Dp = 10
+	downloadIconSize         unit.Dp = 12
 	editorIconSize           unit.Dp = 12
 	renderIconSpacing        unit.Dp = 4
 	renderBtnPaddingH        unit.Dp = 10
@@ -955,7 +956,10 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		n++
 
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return LayoutTextButton(gtx, p.Theme, &p.State.SaveChartButton, "Save .tgz", valuesSpacing)
+			return layoutIconTextButton(gtx, p.Theme, &p.State.SaveChartButton, "Save .tgz", 0,
+				func(gtx layout.Context) layout.Dimensions {
+					return customwidget.LayoutDownloadIcon(gtx, downloadIconSize, theme.ColorAccent)
+				})
 		})
 		n++
 
@@ -965,7 +969,11 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 				cb.Size = showCommentsSize
 				cb.TextSize = unit.Sp(float32(p.Theme.TextSize) * showCommentsTextMult)
 
-				return cb.Layout(gtx)
+				dims := cb.Layout(gtx)
+
+				pushPointerCursor(gtx, dims, &p.State.ShowComments)
+
+				return dims
 			})
 		})
 		n++
@@ -1013,7 +1021,7 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 }
 
 // layoutRenderButton renders a transparent button with hover background,
-// label text, and a play icon on the right.
+// a play icon on the left, and label text.
 func layoutRenderButton(
 	gtx layout.Context,
 	th *material.Theme,
@@ -1031,14 +1039,14 @@ func layoutRenderButton(
 		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return customwidget.LayoutPlayIcon(gtx, renderPlayIconSize, theme.ColorAccent)
+				}),
+				layout.Rigid(layout.Spacer{Width: renderIconSpacing}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					lbl := material.Body2(th, label)
 					lbl.Color = theme.ColorAccent
 
 					return customwidget.LayoutLabel(gtx, lbl)
-				}),
-				layout.Rigid(layout.Spacer{Width: renderIconSpacing}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return customwidget.LayoutPlayIcon(gtx, renderPlayIconSize, theme.ColorAccent)
 				}),
 			)
 		})
