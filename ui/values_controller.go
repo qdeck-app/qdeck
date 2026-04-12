@@ -81,6 +81,9 @@ type ValuesController struct {
 	RecentValuesRunner   *async.Runner[[]domain.RecentValuesFile]
 	FilePickerRunner     *async.Runner[filePickerResult]
 
+	// CustomDecor indicates that windows should use custom decorations (Linux/Windows).
+	CustomDecor bool
+
 	// OnOpenLocalChart is called when a chart file picker result is received.
 	OnOpenLocalChart func(path string)
 
@@ -325,7 +328,7 @@ func (vc *ValuesController) pollRenderRunner() {
 		}
 
 		title := vc.NavState.SelectedChart + " - Render Error"
-		vc.viewerLink = customwidget.OpenViewerWindow(title, errText, "")
+		vc.viewerLink = customwidget.OpenViewerWindow(title, errText, "", vc.CustomDecor)
 
 		return
 	}
@@ -338,7 +341,7 @@ func (vc *ValuesController) pollRenderRunner() {
 	title := vc.NavState.SelectedChart + " - Rendered Template"
 	now := time.Now().Format("20060102-150405")
 	saveFileName := vc.NavState.SelectedChart + "-" + vc.NavState.SelectedVersion + "-" + now + ".yaml"
-	vc.viewerLink = customwidget.OpenViewerWindow(title, res.Value, saveFileName)
+	vc.viewerLink = customwidget.OpenViewerWindow(title, res.Value, saveFileName, vc.CustomDecor)
 }
 
 func (vc *ValuesController) pollExportRunner() {

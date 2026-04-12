@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"gioui.org/app"
+	"gioui.org/gesture"
 	"gioui.org/io/clipboard"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
@@ -53,6 +54,8 @@ const (
 	viewerInputPadH      unit.Dp = 10
 	viewerInputPadV      unit.Dp = 6
 	viewerInputBorderW   unit.Dp = 1
+	viewerTitleWeight            = 700
+	viewerDoubleClick            = 2
 )
 
 const (
@@ -159,11 +162,16 @@ type viewerWindow struct {
 
 	// Link for receiving updated content from the main app.
 	link *ViewerLink
+
+	// Custom window decorations (Linux/Windows).
+	customDecor bool
+	winButtons  WinButtons
+	titleClick  gesture.Click
 }
 
 // OpenViewerWindow spawns a new Gio window in a goroutine displaying the content.
 // saveFileName is the default filename for the save dialog (falls back to "rendered.yaml").
-func OpenViewerWindow(title, content, saveFileName string) *ViewerLink {
+func OpenViewerWindow(title, content, saveFileName string, customDecor bool) *ViewerLink {
 	if saveFileName == "" {
 		saveFileName = "rendered.yaml"
 	}
@@ -184,6 +192,7 @@ func OpenViewerWindow(title, content, saveFileName string) *ViewerLink {
 		lowerLines:   lowerLines,
 		saveFileName: saveFileName,
 		link:         link,
+		customDecor:  customDecor,
 	}
 	v.lineList.Axis = layout.Vertical
 	v.nodeList.Axis = layout.Vertical
@@ -382,6 +391,11 @@ func (v *viewerWindow) run() {
 	v.window = new(app.Window)
 	v.window.Option(app.Title(v.title))
 	v.window.Option(app.Size(viewerWindowWidth, viewerWindowHeight))
+
+	if v.customDecor {
+		v.window.Option(app.Decorated(false))
+	}
+
 	v.explorer = explorer.NewExplorer(v.window)
 	v.link.window.Store(v.window)
 
@@ -400,6 +414,8 @@ func (v *viewerWindow) run() {
 			v.link.closed.Store(true)
 
 			return
+		case app.ConfigEvent:
+			v.winButtons.Maximized = e.Config.Mode == app.Maximized
 		case app.FrameEvent:
 			select {
 			case newContent := <-v.link.ch:
@@ -439,6 +455,8 @@ func (v *viewerWindow) refreshContent(content string) {
 }
 
 func (v *viewerWindow) update(gtx layout.Context) {
+	v.handleWinButtons(gtx)
+
 	// Content search.
 	query := strings.ToLower(v.searchEditor.Text())
 	if query != v.lastQuery {
@@ -578,6 +596,71 @@ func (v *viewerWindow) syncSelectedFile() {
 	v.selectedFile = sel
 }
 
+func (v *viewerWindow) handleWinButtons(gtx layout.Context) {
+	if !v.customDecor {
+		return
+	}
+
+	if v.winButtons.Minimize.Clicked(gtx) {
+		v.window.Perform(system.ActionMinimize)
+	}
+
+	if v.winButtons.Maximize.Clicked(gtx) {
+		v.toggleMaximize()
+	}
+
+	if v.winButtons.Close.Clicked(gtx) {
+		v.window.Perform(system.ActionClose)
+	}
+}
+
+func (v *viewerWindow) toggleMaximize() {
+	if v.winButtons.Maximized {
+		v.window.Perform(system.ActionUnmaximize)
+	} else {
+		v.window.Perform(system.ActionMaximize)
+	}
+}
+
+func (v *viewerWindow) layoutTitleBar(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	// Process double-click on title area to toggle maximize.
+	for {
+		ev, ok := v.titleClick.Update(gtx.Source)
+		if !ok {
+			break
+		}
+
+		if ev.Kind == gesture.KindClick && ev.NumClicks == viewerDoubleClick {
+			v.toggleMaximize()
+		}
+	}
+
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			// The title area doubles as a drag handle for moving the window.
+			dims := layout.Inset{
+				Left: viewerPadH, Right: viewerPadH,
+				Top: viewerPadV, Bottom: viewerPadV,
+			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Body2(th, v.title)
+				lbl.Font.Weight = viewerTitleWeight
+
+				return lbl.Layout(gtx)
+			})
+
+			area := clip.Rect{Max: dims.Size}.Push(gtx.Ops)
+			system.ActionInputOp(system.ActionMove).Add(gtx.Ops)
+			v.titleClick.Add(gtx.Ops)
+			area.Pop()
+
+			return dims
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return v.winButtons.Layout(gtx)
+		}),
+	)
+}
+
 func (v *viewerWindow) saveContent() {
 	// Capture content before launching the goroutine to avoid a data race
 	// with refreshContent, which can reassign v.content on the event loop.
@@ -633,7 +716,20 @@ func (v *viewerWindow) layout(gtx layout.Context, th *material.Theme) layout.Dim
 		})
 	}
 
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+	children := make([]layout.FlexChild, 0, 5) //nolint:mnd
+
+	if v.customDecor {
+		children = append(children,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return v.layoutTitleBar(gtx, th)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return v.layoutSeparator(gtx)
+			}),
+		)
+	}
+
+	children = append(children,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return v.layoutSearchRow(gtx, th)
 		}),
@@ -642,6 +738,8 @@ func (v *viewerWindow) layout(gtx layout.Context, th *material.Theme) layout.Dim
 		}),
 		content,
 	)
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 }
 
 func (v *viewerWindow) layoutFilePanel(gtx layout.Context, th *material.Theme) layout.Dimensions {
