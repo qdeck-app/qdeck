@@ -10,6 +10,7 @@ import (
 func NewTheme() *material.Theme {
 	th := material.NewTheme()
 	th.Shaper = text.NewShaper(text.WithCollection(font.Collection()))
+	th.Face = font.Typeface
 
 	th.ContrastBg = ColorContrastBg
 	th.ContrastFg = ColorContrastFg
