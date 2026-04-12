@@ -11,6 +11,7 @@ APPICON_ICO="$SCRIPT_DIR/appicon.ico"
 LINUX_SIZES=(16 24 32 48 64 128 256 512)
 ICO_SIZES=(16 24 32 48 64 128 256)
 LOGO_PERCENT=80
+CORNER_RADIUS_PERCENT=20
 
 if ! command -v magick &>/dev/null; then
     echo "Error: ImageMagick 7 (magick) is required but not found." >&2
@@ -38,16 +39,25 @@ for size in "${ICO_SIZES[@]}"; do
 done
 magick "${ico_args[@]}" "$APPICON_ICO"
 
-# --- Linux icons (white background) ---
+# --- Linux icons (white background, rounded corners) ---
+tmp_mask=$(mktemp /tmp/qdeck-mask-XXXXXX.png)
+trap 'rm -f "$tmp_mask"' EXIT
+
 for size in "${LINUX_SIZES[@]}"; do
     logo_size=$(( size * LOGO_PERCENT / 100 ))
     (( logo_size < 1 )) && logo_size=1
+    corner_radius=$(( size * CORNER_RADIUS_PERCENT / 100 ))
+    (( corner_radius < 1 )) && corner_radius=1
     out="$LINUX_ICONS_DIR/qdeck-${size}.png"
-    echo "Generating qdeck-${size}.png (${size}x${size}, white background)..."
+    echo "Generating qdeck-${size}.png (${size}x${size}, white background, rounded corners)..."
     magick -background none -density 300 "$SVG" \
         -resize "${logo_size}x${logo_size}" \
         -gravity center -background white -extent "${size}x${size}" \
         "$out"
+    magick -size "${size}x${size}" xc:none \
+        -fill white -draw "roundrectangle 0,0,$(( size - 1 )),$(( size - 1 )),$corner_radius,$corner_radius" \
+        "$tmp_mask"
+    magick "$out" "$tmp_mask" -compose CopyOpacity -composite "$out"
 done
 
 echo ""
