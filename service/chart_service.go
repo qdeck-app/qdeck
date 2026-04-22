@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/repo"
 
 	"github.com/qdeck-app/qdeck/domain"
@@ -320,9 +322,47 @@ func (s *ChartService) loadIndex(repoName string) (*repo.IndexFile, error) {
 	cachePath := filepath.Join(s.settings.RepositoryCache, repoName+"-index.yaml")
 
 	idx, err := repo.LoadIndexFile(cachePath)
+	if err == nil {
+		return idx, nil
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("load index for %s: %w", repoName, err)
+	}
+
+	if dErr := s.downloadIndex(repoName); dErr != nil {
+		return nil, fmt.Errorf("load index for %s: re-download after missing cache: %w", repoName, dErr)
+	}
+
+	idx, err = repo.LoadIndexFile(cachePath)
 	if err != nil {
 		return nil, fmt.Errorf("load index for %s: %w", repoName, err)
 	}
 
 	return idx, nil
+}
+
+func (s *ChartService) downloadIndex(repoName string) error {
+	f, err := repo.LoadFile(s.settings.RepositoryConfig)
+	if err != nil {
+		return fmt.Errorf("load repo file: %w", err)
+	}
+
+	entry := f.Get(repoName)
+	if entry == nil {
+		return fmt.Errorf("repository %q not found in config", repoName)
+	}
+
+	chartRepo, err := repo.NewChartRepository(entry, getter.All(s.settings))
+	if err != nil {
+		return fmt.Errorf("create chart repo: %w", err)
+	}
+
+	chartRepo.CachePath = s.settings.RepositoryCache
+
+	if _, err := chartRepo.DownloadIndexFile(); err != nil {
+		return fmt.Errorf("download index: %w", err)
+	}
+
+	return nil
 }
