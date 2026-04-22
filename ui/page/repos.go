@@ -22,16 +22,15 @@ import (
 )
 
 const (
-	repoPaddingContent unit.Dp = 16
-	repoPaddingBottom  unit.Dp = 8
-	repoPaddingSmall   unit.Dp = 4
+	repoPaddingBottom unit.Dp = 8
+	repoPaddingSmall  unit.Dp = 4
 
 	compactDropZoneHeight        unit.Dp = 48
 	sectionHeaderPaddingTop      unit.Dp = 12
 	sectionHeaderPaddingBottom   unit.Dp = 8
-	recentChartsMaxHeight        unit.Dp = 300
-	recentValuesEntriesMaxHeight unit.Dp = 300
-	repoListMaxHeight            unit.Dp = 400
+	recentChartsMaxHeight        unit.Dp = 130
+	recentValuesEntriesMaxHeight unit.Dp = 130
+	repoListMaxHeight            unit.Dp = 170
 
 	homeDropZoneTitle   = "Drop chart directory, Chart.yaml, or .tar.gz here"
 	valuesDropZoneTitle = "Drop values file (.yaml / .yml)"
@@ -163,43 +162,64 @@ func (p *ReposPage) Layout(gtx layout.Context) layout.Dimensions {
 		}
 	}
 
-	totalH := gtx.Constraints.Max.Y
+	p.State.PageList.Axis = layout.Vertical
+
+	sections := [...]layout.Widget{
+		p.layoutChartsSection,
+		p.layoutRepositoriesSection,
+		p.layoutValuesSection,
+	}
+
+	// Reset each frame; the list-item callback repopulates when the Values
+	// section is actually visible. Stale values would misroute native drops.
+	p.State.ValuesSectionMinY = 0
 
 	return layout.Stack{}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-				layout.Rigid(p.layoutChartsSection),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layoutHorizontalSeparator(gtx, repoPaddingContent, repoPaddingContent)
-				}),
-				layout.Rigid(p.layoutRepositoriesSection),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layoutHorizontalSeparator(gtx, repoPaddingContent, repoPaddingContent)
-				}),
-				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					// Record where the Values section starts in window coordinates
-					// for native drop routing. PageContentTop is the offset from
-					// the window top to the repos page content area.
-					p.State.ValuesSectionMinY = p.State.PageContentTop + (totalH - gtx.Constraints.Max.Y)
+			return material.List(p.Theme, &p.State.PageList).Layout(gtx, len(sections),
+				func(gtx layout.Context, index int) layout.Dimensions {
+					if index == valuesSectionIdx {
+						p.recordValuesSectionMinY()
+					}
 
-					return p.layoutValuesSection(gtx)
-				}),
-			)
+					dims := sections[index](gtx)
+					p.State.SectionHeights[index] = dims.Size.Y
+
+					return dims
+				})
 		}),
 		layout.Expanded(p.layoutOverlay),
 	)
+}
+
+const valuesSectionIdx = 2
+
+// recordValuesSectionMinY computes the y-origin of the Values card in window
+// coordinates from the page list's scroll position plus the heights of any
+// prior sections already measured this frame. Leaves ValuesSectionMinY at 0
+// (drops disabled) if the card's top is scrolled above the page content area.
+func (p *ReposPage) recordValuesSectionMinY() {
+	pos := p.State.PageList.Position
+
+	y := p.State.PageContentTop - pos.Offset
+	for i := pos.First; i < valuesSectionIdx; i++ {
+		y += p.State.SectionHeights[i]
+	}
+
+	if y >= p.State.PageContentTop {
+		p.State.ValuesSectionMinY = y
+	}
 }
 
 // layoutChartsSection renders the "Charts" header, compact drop zone, direct link input, and recent chart items.
 //
 //nolint:dupl // same Gio flex pattern as layoutRepositoriesSection but entirely different children
 func (p *ReposPage) layoutChartsSection(gtx layout.Context) layout.Dimensions {
-	return layout.Inset{
-		Left: repoPaddingContent, Right: repoPaddingContent, Bottom: repoPaddingBottom,
-	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutSectionCard(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutPanelLabel(gtx, p.Theme, "Recent Charts", sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
+				return layoutSectionHeaderWithHint(gtx, p.Theme, "Recent Charts", []string{"Tab"}, "to focus",
+					sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutCompactDropZone),
 			layout.Rigid(p.layoutDirectLinkInput),
@@ -241,12 +261,11 @@ func (p *ReposPage) layoutDropZone(
 
 // layoutValuesSection renders the "Values" header, values drop zone, and recent values+chart entries.
 func (p *ReposPage) layoutValuesSection(gtx layout.Context) layout.Dimensions {
-	return layout.Inset{
-		Left: repoPaddingContent, Right: repoPaddingContent, Bottom: repoPaddingBottom,
-	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutSectionCard(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutPanelLabel(gtx, p.Theme, "Values", sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
+				return layoutSectionHeaderWithHint(gtx, p.Theme, "Values", []string{"Tab", "Tab"}, "to focus",
+					sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutValuesDropZone),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -380,12 +399,11 @@ func (p *ReposPage) layoutRepositoriesSection(gtx layout.Context) layout.Dimensi
 		return layoutCenteredLoading(gtx, p.Theme)
 	}
 
-	return layout.Inset{
-		Left: repoPaddingContent, Right: repoPaddingContent,
-	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layoutSectionCard(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutPanelLabel(gtx, p.Theme, "Repositories", sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
+				return layoutSectionHeaderWithHint(gtx, p.Theme, "Repositories", []string{"Tab"}, "to focus",
+					sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutAddRepoRow),
 			layout.Rigid(p.layoutAddForm),
@@ -406,20 +424,13 @@ func (p *ReposPage) layoutAddRepoRow(gtx layout.Context) layout.Dimensions {
 		label = cancelRepoLabel
 	}
 
-	return layout.Inset{Bottom: cardItemSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layoutClickablePointer(gtx, &p.State.AddButton,
-			func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{
-					Left: cardPaddingH, Right: cardPaddingH,
-					Top: cardPaddingV, Bottom: cardPaddingV,
-				}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Body2(p.Theme, label)
-					lbl.Color = theme.ColorAccent
+	return layoutCardFocusable(gtx, &p.State.AddButton, false,
+		func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Body1(p.Theme, label)
+			lbl.Color = theme.ColorAccent
 
-					return customwidget.LayoutLabel(gtx, lbl)
-				})
-			})
-	})
+			return customwidget.LayoutLabel(gtx, lbl)
+		})
 }
 
 func (p *ReposPage) layoutAddForm(gtx layout.Context) layout.Dimensions {
@@ -670,6 +681,8 @@ func (p *ReposPage) handleTab(reverse bool) {
 	if p.sectionItemCount(p.State.FocusedSection) == 0 {
 		p.skipToNonEmptySection(delta)
 	}
+
+	p.scrollFocusedIntoView()
 }
 
 // cycleSection advances FocusedSection by one step in the given direction.
@@ -696,6 +709,93 @@ func (p *ReposPage) moveFocus(delta int) {
 
 	p.State.FocusedIndex += delta
 	p.State.FocusedIndex = max(min(p.State.FocusedIndex, maxIdx), 0)
+
+	p.scrollFocusedIntoView()
+}
+
+// scrollFocusedIntoView first makes sure the focused section's card is in the
+// page viewport, then adjusts that section's inner list so the focused row is
+// visible. Only scrolls when the target lies outside the currently visible
+// window.
+func (p *ReposPage) scrollFocusedIntoView() {
+	p.scrollFocusedSectionIntoPageView()
+
+	var list *widget.List
+
+	switch p.State.FocusedSection {
+	case state.RepoSectionRecent:
+		list = &p.State.RecentList
+	case state.RepoSectionRepos, state.RepoSectionAddForm:
+		list = &p.State.RepoList
+	case state.RepoSectionValues:
+		list = &p.State.RecentValuesList
+	default:
+		return
+	}
+
+	idx := p.State.FocusedIndex
+	pos := &list.Position
+	first := pos.First
+	count := pos.Count
+
+	// Last fully visible index: Position.Count includes a partially-clipped last
+	// item when OffsetLast < 0, so subtract one in that case.
+	lastFull := first + count - 1
+	if pos.OffsetLast < 0 && count > 0 {
+		lastFull = first + count - 2 //nolint:mnd // exclude the clipped last item
+	}
+
+	// First fully visible index: Position.Offset > 0 means the first item is
+	// clipped at the top, so treat first+1 as the first fully visible.
+	firstFull := first
+	if pos.Offset > 0 {
+		firstFull = first + 1
+	}
+
+	switch {
+	case idx < firstFull:
+		pos.First = idx
+		pos.Offset = 0
+	case count > 0 && idx > lastFull:
+		// Place focused item as the last fully visible row.
+		pos.First = max(0, idx-(count-1)+1)
+		pos.Offset = 0
+	}
+}
+
+// scrollFocusedSectionIntoPageView ensures the focused section's top-level
+// card is visible in the page-level scroll list. Sub-focus on the add-repo
+// form maps to the Repositories card.
+func (p *ReposPage) scrollFocusedSectionIntoPageView() {
+	var target int
+
+	switch p.State.FocusedSection {
+	case state.RepoSectionRecent:
+		target = 0
+	case state.RepoSectionRepos, state.RepoSectionAddForm:
+		target = 1
+	case state.RepoSectionValues:
+		target = valuesSectionIdx
+	default:
+		return
+	}
+
+	pos := &p.State.PageList.Position
+
+	switch {
+	case target < pos.First:
+		pos.First = target
+		pos.Offset = 0
+	case target == pos.First && pos.Offset > 0:
+		pos.Offset = 0
+	case target >= pos.First+pos.Count:
+		pos.First = target
+		pos.Offset = 0
+	case pos.Count > 0 && target == pos.First+pos.Count-1 && pos.OffsetLast < 0:
+		// Partly clipped at the bottom — bring the card to the top.
+		pos.First = target
+		pos.Offset = 0
+	}
 }
 
 // skipToNonEmptySection cycles through sections in the given direction
@@ -721,7 +821,11 @@ func (p *ReposPage) sectionItemCount(section state.RepoSection) int {
 	case state.RepoSectionRepos:
 		return len(p.State.Repos)
 	case state.RepoSectionAddForm:
-		return 1
+		if p.State.AddFormVisible {
+			return 1
+		}
+
+		return 0
 	default:
 		return 0
 	}
