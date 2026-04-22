@@ -28,6 +28,15 @@ type RepoPageState struct {
 	FocusedSection RepoSection
 	FocusedIndex   int
 
+	// Page-level scroll
+	PageList widget.List
+
+	// SectionHeights[i] is the measured pixel height of the i-th top-level
+	// page section (Charts=0, Repositories=1, Values=2). Populated during
+	// layout; used to compute the Values section's window-y for native drop
+	// routing when the page is scrolled.
+	SectionHeights [3]int
+
 	// Widget state: repo list
 	RepoList   widget.List
 	RepoClicks []widget.Clickable
