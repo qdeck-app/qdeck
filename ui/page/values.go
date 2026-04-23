@@ -22,6 +22,8 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/qdeck-app/qdeck/domain"
+	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/state"
 	"github.com/qdeck-app/qdeck/ui/theme"
 	customwidget "github.com/qdeck-app/qdeck/ui/widget"
@@ -99,8 +101,8 @@ var cellNavMod = func() key.Modifiers {
 //
 //nolint:gochecknoglobals // platform-specific hint resolved once at init
 var helpShortcutLine = customwidget.ShortcutLabel(
-	"Ctrl+Shift+Arrows to navigate \u00b7 Tab/Shift+Tab indent \u00b7 ",
-	"Alt+Arrows to navigate \u00b7 Tab/Shift+Tab indent \u00b7 ",
+	"Ctrl+Shift+Arrows nav \u00b7 Tab/Shift+Tab indent \u00b7 \u2318+/ fold \u00b7 \u2318+Shift+/ expand all \u00b7 ",
+	"Alt+Arrows nav \u00b7 Tab/Shift+Tab indent \u00b7 Ctrl+/ fold \u00b7 Ctrl+Shift+/ expand all \u00b7 ",
 )
 
 // ValuesPageCallbacks bundles every callback the ValuesPage needs from its controller.
@@ -125,6 +127,11 @@ type ValuesPageCallbacks struct {
 	// entryKey is the flat key of the focused entry (stable across sessions
 	// and filter changes); empty when no entry is resolvable at row.
 	OnCellFocusChanged func(entryKey string, col int)
+
+	// OnCollapseChanged fires whenever State.CollapsedKeys is mutated (via
+	// chevron click or auto-expand during search). The controller persists
+	// the updated set as part of ChartUIState.
+	OnCollapseChanged func()
 }
 
 // ValuesPage renders the unified override editor: default values on the left,
@@ -263,6 +270,8 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		p.State.FocusedRow = row
 		p.State.FocusedCol = col
 	}
+	p.Table.CollapsedKeys = p.State.CollapsedKeys
+	p.Table.OnCollapseToggle = p.onCollapseToggle
 
 	// Build columnEditors slice for search filter.
 	for c := range p.State.ColumnCount {
@@ -275,6 +284,35 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		p.columnEditorSlices[:p.State.ColumnCount],
 		p.State.FilteredIndices,
 	)
+
+	// Snapshot the user's collapsed set when search becomes active, so that
+	// any search-induced auto-uncollapse below can be reverted when the user
+	// clears the search. Restore on the reverse transition.
+	inSearch := p.Search.Editor.Text() != ""
+	p.syncSearchCollapseSnapshot(inSearch)
+
+	// Auto-expand any collapsed ancestors of search matches so results are
+	// never hidden. Mutates CollapsedKeys only — CollapsedPreSearch retains
+	// the user's intent and is what the controller persists while
+	// SearchCollapseActive is true, so nothing is lost on search clear.
+	if inSearch && len(p.State.CollapsedKeys) > 0 {
+		service.UncollapseMatchAncestors(
+			p.State.DefaultValues.Entries,
+			p.State.FilteredIndices,
+			p.State.CollapsedKeys,
+		)
+	}
+
+	// Hide entries inside collapsed sections. Skipped during an active search
+	// so matches inside (previously) collapsed sections stay visible.
+	if !inSearch && len(p.State.CollapsedKeys) > 0 {
+		p.State.FilteredIndices = service.ApplyCollapseFilter(
+			p.State.DefaultValues.Entries,
+			p.State.FilteredIndices,
+			p.State.CollapsedKeys,
+			p.State.FilteredIndices,
+		)
+	}
 
 	// Resolve a pending restored focus key to a filtered row. If the key is no
 	// longer visible (filtered out or removed from the chart), drop the
@@ -302,14 +340,16 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		p.State.FocusedCol = max(0, p.State.ColumnCount-1)
 	}
 
-	// If the focused row points at a section header (e.g. default zero value
-	// on first load), advance to the first non-section row so the initial
-	// highlight lands on an editable cell.
+	// If the focused row points at an expanded section header (e.g. default
+	// zero value on first load), advance to the first non-section row so the
+	// initial highlight lands on an editable cell. Collapsed section headers
+	// are intentionally landable — users press Cmd+/ there to unfold.
 	if len(p.State.FilteredIndices) > 0 && p.State.FocusedRow >= 0 {
 		entries := p.State.DefaultValues.Entries
 		filtered := p.State.FilteredIndices
 
-		if idx := filtered[p.State.FocusedRow]; idx < len(entries) && entries[idx].IsSection() {
+		if idx := filtered[p.State.FocusedRow]; idx < len(entries) &&
+			entries[idx].IsSection() && !p.State.CollapsedKeys[entries[idx].Key] {
 			for r, fi := range filtered {
 				if fi < len(entries) && !entries[fi].IsSection() {
 					p.State.FocusedRow = r
@@ -420,6 +460,94 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		}),
 		layout.Expanded(p.layoutRecentDropdownOverlay),
 	)
+}
+
+// onCollapseToggle flips the collapsed state for the given section key and
+// fires OnCollapseChanged so the controller persists the new set. During a
+// search the toggle is mirrored into CollapsedPreSearch so the user's intent
+// survives the search-clear restore.
+func (p *ValuesPage) onCollapseToggle(key string) {
+	if p.State.CollapsedKeys == nil {
+		p.State.CollapsedKeys = make(map[string]bool)
+	}
+
+	if p.State.CollapsedKeys[key] {
+		delete(p.State.CollapsedKeys, key)
+	} else {
+		p.State.CollapsedKeys[key] = true
+	}
+
+	if p.State.SearchCollapseActive {
+		if p.State.CollapsedPreSearch == nil {
+			p.State.CollapsedPreSearch = make(map[string]bool)
+		}
+
+		if p.State.CollapsedPreSearch[key] {
+			delete(p.State.CollapsedPreSearch, key)
+		} else {
+			p.State.CollapsedPreSearch[key] = true
+		}
+	}
+
+	if p.OnCollapseChanged != nil {
+		p.OnCollapseChanged()
+	}
+}
+
+// syncSearchCollapseSnapshot manages CollapsedPreSearch across the empty↔︎
+// non-empty search transitions. Entering search captures the user's current
+// collapsed set so search-induced auto-uncollapses can be undone later.
+// Leaving search restores that snapshot into the effective CollapsedKeys and
+// persists the result (idempotent when no mid-search user toggles happened).
+func (p *ValuesPage) syncSearchCollapseSnapshot(inSearch bool) {
+	switch {
+	case inSearch && !p.State.SearchCollapseActive:
+		p.State.CollapsedPreSearch = cloneCollapsed(p.State.CollapsedKeys)
+		p.State.SearchCollapseActive = true
+	case !inSearch && p.State.SearchCollapseActive:
+		if !collapsedEqual(p.State.CollapsedKeys, p.State.CollapsedPreSearch) {
+			p.State.CollapsedKeys = cloneCollapsed(p.State.CollapsedPreSearch)
+
+			if p.OnCollapseChanged != nil {
+				p.OnCollapseChanged()
+			}
+		}
+
+		p.State.CollapsedPreSearch = nil
+		p.State.SearchCollapseActive = false
+	}
+}
+
+// cloneCollapsed returns an independent copy of a collapsed-keys map, or nil
+// when the source has no entries. Callers depend on a non-aliased copy so
+// later mutations of one don't leak into the other.
+func cloneCollapsed(m map[string]bool) map[string]bool {
+	if len(m) == 0 {
+		return nil
+	}
+
+	out := make(map[string]bool, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+
+	return out
+}
+
+// collapsedEqual reports whether two collapsed-keys maps describe the same
+// set. Both nil and empty maps are treated as equivalent.
+func collapsedEqual(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // processDropdownEvents handles all recent dropdown click events and the
@@ -1227,6 +1355,8 @@ func (p *ValuesPage) handleKeyEvents(gtx layout.Context) {
 			key.Filter{Name: key.NameRightArrow, Required: cellNavMod},
 			key.Filter{Name: key.NameTab},
 			key.Filter{Name: key.NameTab, Required: key.ModShift},
+			key.Filter{Name: "/", Required: key.ModShortcut},
+			key.Filter{Name: "/", Required: key.ModShortcut | key.ModShift},
 		)
 		if !ok {
 			break
@@ -1252,8 +1382,222 @@ func (p *ValuesPage) handleKeyEvents(gtx layout.Context) {
 			} else {
 				p.indentFocusedEditor(gtx)
 			}
+		case "/":
+			if e.Modifiers.Contain(key.ModShift) {
+				p.handleExpandAllShortcut(gtx)
+			} else {
+				p.handleCollapseShortcut(gtx)
+			}
 		}
 	}
+}
+
+// handleExpandAllShortcut clears every collapsed section at once. Useful as
+// an "I give up, show me everything" escape hatch so users never have to
+// keyboard-navigate to each collapsed chevron in a deep tree.
+func (p *ValuesPage) handleExpandAllShortcut(gtx layout.Context) {
+	if len(p.State.CollapsedKeys) == 0 && len(p.State.CollapsedPreSearch) == 0 {
+		return
+	}
+
+	clear(p.State.CollapsedKeys)
+	// Mirror into the snapshot so a search clear doesn't re-collapse what the
+	// user just asked to expand.
+	clear(p.State.CollapsedPreSearch)
+
+	if p.OnCollapseChanged != nil {
+		p.OnCollapseChanged()
+	}
+
+	gtx.Execute(op.InvalidateCmd{})
+}
+
+// handleCollapseShortcut toggles the collapsed state of the section enclosing
+// the focused cell. When the focused row is itself a section, that section is
+// toggled; when it's a leaf, its parent section is toggled. On collapse the
+// focus is moved to the next editable leaf after the section so the user
+// isn't left with focus on a now-hidden row.
+func (p *ValuesPage) handleCollapseShortcut(gtx layout.Context) {
+	if p.State.DefaultValues == nil || len(p.State.FilteredIndices) == 0 {
+		return
+	}
+
+	row := p.State.FocusedRow
+	if row < 0 || row >= len(p.State.FilteredIndices) {
+		return
+	}
+
+	entries := p.State.DefaultValues.Entries
+
+	entryIdx := p.State.FilteredIndices[row]
+	if entryIdx >= len(entries) {
+		return
+	}
+
+	targetKey := entries[entryIdx].Key
+	if !entries[entryIdx].IsSection() {
+		parent := domain.FlatKey(targetKey).Parent()
+		if parent == "" {
+			return
+		}
+
+		targetKey = string(parent)
+	}
+
+	wasCollapsed := p.State.CollapsedKeys[targetKey]
+
+	p.onCollapseToggle(targetKey)
+
+	// Relocate focus so the cursor always lands on an editable cell.
+	// Collapse: first leaf outside the now-hidden subtree.
+	// Expand:   first newly-visible leaf inside the section.
+	var nextKey string
+	if wasCollapsed {
+		nextKey = p.firstLeafInsideSection(targetKey)
+	} else {
+		nextKey = p.nextLeafOutsideSection(targetKey)
+	}
+
+	if nextKey != "" {
+		p.State.PendingFocusKey = nextKey
+		p.State.PendingFocusHighlight = true
+	}
+
+	gtx.Execute(op.InvalidateCmd{})
+}
+
+// firstLeafInsideSection returns the flat key of the first editable leaf
+// inside the given section that isn't hidden by a nested collapsed section.
+// Returns "" when every descendant is either a section header or buried under
+// another collapsed ancestor (caller leaves focus alone in that case).
+//
+// Descendants are NOT guaranteed to be contiguous in the sorted entries list:
+// a sibling sharing sectionKey as a byte prefix can sort between descendants
+// (e.g. "svc.tls", "svc.tlsCertFile", "svc.tls[0]" — because '.' < 'C' < '[').
+// So we keep scanning past non-descendants and only stop once we've left the
+// byte range of keys starting with sectionKey entirely.
+func (p *ValuesPage) firstLeafInsideSection(sectionKey string) string {
+	entries := p.State.DefaultValues.Entries
+
+	sectionIdx := -1
+
+	for i, e := range entries {
+		if e.Key == sectionKey {
+			sectionIdx = i
+
+			break
+		}
+	}
+
+	if sectionIdx < 0 {
+		return ""
+	}
+
+	prefix := sectionKey
+
+	for i := sectionIdx + 1; i < len(entries); i++ {
+		k := entries[i].Key
+
+		// Completely past the prefix range → no more descendants can exist.
+		if len(k) < len(prefix) || k[:len(prefix)] != prefix {
+			return ""
+		}
+
+		// Same-prefix sibling (e.g. "svc.tlsCertFile" vs section "svc.tls"):
+		// skip, but keep scanning — real descendants may sort after it.
+		if len(k) == len(prefix) {
+			continue
+		}
+
+		if sep := k[len(prefix)]; sep != '.' && sep != '[' {
+			continue
+		}
+
+		if entries[i].IsSection() {
+			continue
+		}
+
+		if p.isHiddenByCollapsedAncestor(k) {
+			continue
+		}
+
+		return k
+	}
+
+	return ""
+}
+
+// isHiddenByCollapsedAncestor reports whether any ancestor of key is in the
+// current collapsed set. Walks via FlatKey.Parent so list-header sections
+// (e.g. "foo.bar" above "foo.bar[0].baz") are not skipped.
+func (p *ValuesPage) isHiddenByCollapsedAncestor(key string) bool {
+	for p2 := domain.FlatKey(key).Parent(); p2 != ""; p2 = p2.Parent() {
+		if p.State.CollapsedKeys[string(p2)] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// nextLeafOutsideSection returns the flat key of the first editable leaf that
+// comes after the given section in the sorted entries list, skipping the
+// section's own descendants. Falls back to the last leaf before the section
+// when the section sits at the end of the list. Returns "" if no leaf exists.
+func (p *ValuesPage) nextLeafOutsideSection(sectionKey string) string {
+	entries := p.State.DefaultValues.Entries
+
+	sectionIdx := -1
+
+	for i, e := range entries {
+		if e.Key == sectionKey {
+			sectionIdx = i
+
+			break
+		}
+	}
+
+	if sectionIdx < 0 {
+		return ""
+	}
+
+	prefix := sectionKey
+
+	for i := sectionIdx + 1; i < len(entries); i++ {
+		k := entries[i].Key
+
+		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
+			if sep := k[len(prefix)]; sep == '.' || sep == '[' {
+				continue
+			}
+		}
+
+		if entries[i].IsSection() {
+			continue
+		}
+
+		// Another collapsed section may hide this leaf; skip so the focus
+		// target is guaranteed to be visible after the filter rebuild.
+		if p.isHiddenByCollapsedAncestor(k) {
+			continue
+		}
+
+		return k
+	}
+
+	for i := sectionIdx - 1; i >= 0; i-- {
+		if entries[i].IsSection() {
+			continue
+		}
+
+		if p.isHiddenByCollapsedAncestor(entries[i].Key) {
+			continue
+		}
+
+		return entries[i].Key
+	}
+
+	return ""
 }
 
 // moveCellFocusRow moves keyboard focus to the next/previous non-section
@@ -1275,7 +1619,15 @@ func (p *ValuesPage) moveCellFocusRow(gtx layout.Context, delta int) {
 		}
 
 		entryIdx := filtered[row]
-		if entryIdx < len(entries) && !entries[entryIdx].IsSection() {
+		if entryIdx >= len(entries) {
+			continue
+		}
+
+		entry := entries[entryIdx]
+		// Stop on editable leaves (the common case) or on collapsed section
+		// headers, so the user can reach a collapsed chevron with the arrow
+		// keys and unfold it via Cmd+/.
+		if !entry.IsSection() || p.State.CollapsedKeys[entry.Key] {
 			break
 		}
 	}
@@ -1285,7 +1637,11 @@ func (p *ValuesPage) moveCellFocusRow(gtx layout.Context, delta int) {
 
 	entryIdx := filtered[row]
 
-	if col >= 0 && col < p.State.ColumnCount {
+	if entries[entryIdx].IsSection() {
+		// Section rows have no visible editor; release keyboard focus so the
+		// previous editor doesn't keep receiving keystrokes.
+		gtx.Execute(key.FocusCmd{Tag: nil})
+	} else if col >= 0 && col < p.State.ColumnCount {
 		editors := p.State.Columns[col].OverrideEditors
 		if entryIdx < len(editors) {
 			gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})

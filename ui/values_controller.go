@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -214,6 +215,7 @@ func (vc *ValuesController) Callbacks() page.ValuesPageCallbacks {
 		OnKeyCopied:             vc.onKeyCopied,
 		OnShowCommentsChanged:   vc.onShowCommentsChanged,
 		OnCellFocusChanged:      vc.onCellFocusChanged,
+		OnCollapseChanged:       vc.onCollapseChanged,
 	}
 }
 
@@ -497,6 +499,9 @@ func (vc *ValuesController) ResetState() {
 	vc.State.PendingFocusHighlight = false
 	vc.State.FocusedRow = 0
 	vc.State.FocusedCol = 0
+	vc.State.CollapsedKeys = nil
+	vc.State.CollapsedPreSearch = nil
+	vc.State.SearchCollapseActive = false
 
 	for i := range vc.State.DefaultValueEditors {
 		vc.State.DefaultValueEditors[i].SetText("")
@@ -1063,8 +1068,24 @@ func (vc *ValuesController) onCellFocusChanged(entryKey string, col int) {
 	// rapid changes into a single write after the user settles.
 	vc.focusSaver.Schedule(chartFocusJob{
 		chartKey: chartKey,
-		state:    domain.ChartUIState{FocusedKey: entryKey, FocusedCol: col},
+		state: domain.ChartUIState{
+			FocusedKey:    entryKey,
+			FocusedCol:    col,
+			CollapsedKeys: collapsedMapToSlice(vc.persistedCollapsedKeys()),
+		},
 	})
+}
+
+// persistedCollapsedKeys returns the authoritative collapsed-keys set that
+// should be written to disk. During an active search the user's intent lives
+// in CollapsedPreSearch (CollapsedKeys has been transiently mutated by the
+// search auto-uncollapse); otherwise CollapsedKeys is the source of truth.
+func (vc *ValuesController) persistedCollapsedKeys() map[string]bool {
+	if vc.State.SearchCollapseActive {
+		return vc.State.CollapsedPreSearch
+	}
+
+	return vc.State.CollapsedKeys
 }
 
 // loadSavedCellFocusAsync dispatches a background load of this chart's
@@ -1120,4 +1141,64 @@ func (vc *ValuesController) pollChartUIState() {
 	vc.State.PendingFocusKey = res.Value.state.FocusedKey
 	vc.State.FocusedCol = res.Value.state.FocusedCol
 	vc.State.PendingFocusHighlight = true
+	vc.State.CollapsedKeys = collapsedSliceToMap(res.Value.state.CollapsedKeys)
+}
+
+// collapsedSliceToMap builds the runtime map view from the persisted slice.
+// Returns nil when the slice is empty so absence stays cheap to check.
+func collapsedSliceToMap(keys []string) map[string]bool {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	m := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		m[k] = true
+	}
+
+	return m
+}
+
+// collapsedMapToSlice produces a sorted slice for stable JSON serialization.
+func collapsedMapToSlice(m map[string]bool) []string {
+	if len(m) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+// onCollapseChanged debounces persistence of the collapsed-keys set onto the
+// chart's UIState. Reuses focusSaver so one debounced write covers both focus
+// and collapse changes; each job carries the full snapshot the page is in.
+func (vc *ValuesController) onCollapseChanged() {
+	chartKey := vc.State.ChartKey()
+	if chartKey == "" {
+		return
+	}
+
+	entryKey := ""
+
+	entries := vc.State.DefaultValues.Entries
+	if vc.State.FocusedRow >= 0 && vc.State.FocusedRow < len(vc.State.FilteredIndices) {
+		if idx := vc.State.FilteredIndices[vc.State.FocusedRow]; idx < len(entries) {
+			entryKey = entries[idx].Key
+		}
+	}
+
+	vc.focusSaver.Schedule(chartFocusJob{
+		chartKey: chartKey,
+		state: domain.ChartUIState{
+			FocusedKey:    entryKey,
+			FocusedCol:    vc.State.FocusedCol,
+			CollapsedKeys: collapsedMapToSlice(vc.persistedCollapsedKeys()),
+		},
+	})
 }

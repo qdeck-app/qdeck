@@ -182,6 +182,23 @@ type ValuesPageState struct {
 	PendingFocusKey       string
 	PendingFocusHighlight bool
 
+	// CollapsedKeys is the effective set of section flat keys whose descendants
+	// are hidden on the values page. Map for O(1) ancestor-prefix checks during
+	// filter rebuild. During a search the page may auto-uncollapse ancestors of
+	// matches here, so this is NOT always the user's intent — see
+	// CollapsedPreSearch.
+	CollapsedKeys map[string]bool
+
+	// CollapsedPreSearch holds the user's authoritative collapsed set captured
+	// when search becomes active, so the view reverts to the user's intent when
+	// the search is cleared. nil outside search mode. While SearchCollapseActive
+	// is true, CollapsedPreSearch — not CollapsedKeys — is what gets persisted,
+	// so temporary search-induced expansions don't overwrite the saved state.
+	// onCollapseToggle mirrors explicit user toggles into this snapshot so
+	// mid-search user actions still survive the search clear.
+	CollapsedPreSearch   map[string]bool
+	SearchCollapseActive bool
+
 	// +Values button
 	AddColumnButton widget.Clickable
 
