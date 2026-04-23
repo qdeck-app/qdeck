@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"gioui.org/io/clipboard"
 	"gioui.org/io/event"
@@ -69,6 +70,20 @@ const (
 	copyLabel                    = "Copy"
 	helmCmdMaxWidthRatio float32 = 0.35 // fraction of row width reserved for helm command
 )
+
+// cellNavMod is the modifier for arrow-key cell navigation. On macOS we use
+// Ctrl+Shift+Arrow to avoid stealing Cmd+Arrow (line/doc nav) and Option+Arrow
+// (word nav) from the focused editor. On Windows/Linux we use Alt+Arrow,
+// which is free inside text editors on those platforms.
+//
+//nolint:gochecknoglobals // platform-specific modifier resolved once at init
+var cellNavMod = func() key.Modifiers {
+	if customwidget.IsMac {
+		return key.ModCtrl | key.ModShift
+	}
+
+	return key.ModAlt
+}()
 
 // ValuesPageCallbacks bundles every callback the ValuesPage needs from its controller.
 type ValuesPageCallbacks struct {
@@ -1077,6 +1092,10 @@ func (p *ValuesPage) handleKeyEvents(gtx layout.Context) {
 
 	for {
 		ev, ok := gtx.Event(
+			key.Filter{Name: key.NameUpArrow, Required: cellNavMod},
+			key.Filter{Name: key.NameDownArrow, Required: cellNavMod},
+			key.Filter{Name: key.NameLeftArrow, Required: cellNavMod},
+			key.Filter{Name: key.NameRightArrow, Required: cellNavMod},
 			key.Filter{Name: key.NameTab},
 			key.Filter{Name: key.NameTab, Required: key.ModShift},
 		)
@@ -1089,18 +1108,28 @@ func (p *ValuesPage) handleKeyEvents(gtx layout.Context) {
 			continue
 		}
 
-		if e.Name == key.NameTab {
+		switch e.Name {
+		case key.NameUpArrow:
+			p.moveCellFocusRow(gtx, -1)
+		case key.NameDownArrow:
+			p.moveCellFocusRow(gtx, 1)
+		case key.NameLeftArrow:
+			p.moveCellFocusCol(gtx, -1)
+		case key.NameRightArrow:
+			p.moveCellFocusCol(gtx, 1)
+		case key.NameTab:
 			if e.Modifiers.Contain(key.ModShift) {
-				p.moveCellFocus(gtx, -1)
+				p.outdentFocusedEditor(gtx)
 			} else {
-				p.moveCellFocus(gtx, 1)
+				p.indentFocusedEditor(gtx)
 			}
 		}
 	}
 }
 
-// moveCellFocus moves keyboard focus to the next/previous non-section editor cell.
-func (p *ValuesPage) moveCellFocus(gtx layout.Context, delta int) {
+// moveCellFocusRow moves keyboard focus to the next/previous non-section
+// editor cell in the same column.
+func (p *ValuesPage) moveCellFocusRow(gtx layout.Context, delta int) {
 	if p.State.DefaultValues == nil || len(p.State.FilteredIndices) == 0 {
 		return
 	}
@@ -1110,11 +1139,10 @@ func (p *ValuesPage) moveCellFocus(gtx layout.Context, delta int) {
 	row := p.State.FocusedRow
 	col := p.State.FocusedCol
 
-	// Find next non-section row in the direction of delta.
 	for {
 		row += delta
 		if row < 0 || row >= len(filtered) {
-			return // hit boundary
+			return
 		}
 
 		entryIdx := filtered[row]
@@ -1135,6 +1163,180 @@ func (p *ValuesPage) moveCellFocus(gtx layout.Context, delta int) {
 		}
 	}
 
-	// Scroll list to make the row visible.
 	p.State.OverrideList.Position.First = max(0, row-2) //nolint:mnd // show 2 rows above
+}
+
+// moveCellFocusCol moves keyboard focus to the next/previous column on the
+// same row, wrapping to the prev/next non-section row at the table edges.
+func (p *ValuesPage) moveCellFocusCol(gtx layout.Context, delta int) {
+	if p.State.DefaultValues == nil || len(p.State.FilteredIndices) == 0 || p.State.ColumnCount == 0 {
+		return
+	}
+
+	entries := p.State.DefaultValues.Entries
+	filtered := p.State.FilteredIndices
+	row := p.State.FocusedRow
+
+	if row < 0 || row >= len(filtered) {
+		return
+	}
+
+	if idx := filtered[row]; idx >= len(entries) || entries[idx].IsSection() {
+		return
+	}
+
+	col := p.State.FocusedCol + delta
+
+	for col < 0 || col >= p.State.ColumnCount {
+		if col < 0 {
+			for {
+				row--
+				if row < 0 {
+					return
+				}
+
+				idx := filtered[row]
+				if idx < len(entries) && !entries[idx].IsSection() {
+					break
+				}
+			}
+
+			col = p.State.ColumnCount - 1
+		} else {
+			for {
+				row++
+				if row >= len(filtered) {
+					return
+				}
+
+				idx := filtered[row]
+				if idx < len(entries) && !entries[idx].IsSection() {
+					break
+				}
+			}
+
+			col = 0
+		}
+	}
+
+	p.State.FocusedRow = row
+	p.State.FocusedCol = col
+
+	entryIdx := filtered[row]
+	editors := p.State.Columns[col].OverrideEditors
+
+	if entryIdx < len(editors) {
+		gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
+	}
+
+	p.State.OverrideList.Position.First = max(0, row-2) //nolint:mnd // show 2 rows above
+}
+
+// focusedEditor returns the override editor at (FocusedRow, FocusedCol) along
+// with that column's YAML indent width, but only if that editor currently has
+// keyboard focus. Returns (nil, 0) otherwise so Tab in the search bar or
+// elsewhere is a no-op.
+func (p *ValuesPage) focusedEditor(gtx layout.Context) (*widget.Editor, int) {
+	if p.State.DefaultValues == nil || len(p.State.FilteredIndices) == 0 {
+		return nil, 0
+	}
+
+	row := p.State.FocusedRow
+	col := p.State.FocusedCol
+
+	if row < 0 || row >= len(p.State.FilteredIndices) {
+		return nil, 0
+	}
+
+	if col < 0 || col >= p.State.ColumnCount {
+		return nil, 0
+	}
+
+	entryIdx := p.State.FilteredIndices[row]
+	editors := p.State.Columns[col].OverrideEditors
+
+	if entryIdx >= len(editors) {
+		return nil, 0
+	}
+
+	ed := &editors[entryIdx]
+	if !gtx.Focused(ed) {
+		return nil, 0
+	}
+
+	return ed, p.State.Columns[col].YAMLIndent()
+}
+
+// indentFocusedEditor inserts N spaces at the cursor of the focused cell
+// editor, where N is the column's detected YAML indent.
+func (p *ValuesPage) indentFocusedEditor(gtx layout.Context) {
+	ed, n := p.focusedEditor(gtx)
+	if ed == nil || n <= 0 {
+		return
+	}
+
+	ed.Insert(strings.Repeat(" ", n))
+}
+
+// outdentFocusedEditor removes up to N leading spaces from the line containing
+// the cursor in the focused cell editor, preserving the caret's offset within
+// the line (and the selection if any).
+func (p *ValuesPage) outdentFocusedEditor(gtx layout.Context) {
+	ed, n := p.focusedEditor(gtx)
+	if ed == nil || n <= 0 {
+		return
+	}
+
+	text := ed.Text()
+	start, end := ed.Selection()
+
+	// Convert rune offset to byte offset (mirrors autoIndentAfterNewline).
+	byteOff := 0
+	runeIdx := 0
+
+	for byteOff < len(text) && runeIdx < start {
+		_, sz := utf8.DecodeRuneInString(text[byteOff:])
+		byteOff += sz
+		runeIdx++
+	}
+
+	lineStart := 0
+
+	for i := byteOff - 1; i >= 0; i-- {
+		if text[i] == '\n' {
+			lineStart = i + 1
+
+			break
+		}
+	}
+
+	remove := 0
+	for remove < n && lineStart+remove < len(text) && text[lineStart+remove] == ' ' {
+		remove++
+	}
+
+	if remove == 0 {
+		return
+	}
+
+	runeLineStart := utf8.RuneCountInString(text[:lineStart])
+
+	ed.SetCaret(runeLineStart, runeLineStart+remove)
+	ed.Insert("")
+
+	// Shift the original caret/anchor past the removed run: positions inside
+	// the removed spaces snap to the new line start; positions after shift
+	// left by `remove`; positions before the line are untouched.
+	adjust := func(pos int) int {
+		switch {
+		case pos < runeLineStart:
+			return pos
+		case pos <= runeLineStart+remove:
+			return runeLineStart
+		default:
+			return pos - remove
+		}
+	}
+
+	ed.SetCaret(adjust(start), adjust(end))
 }
