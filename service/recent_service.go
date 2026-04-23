@@ -208,6 +208,79 @@ func (s *RecentService) SaveShowComments(ctx context.Context, show bool) error {
 	return nil
 }
 
+// LoadChartUIState returns the persisted UI state for the given chart key.
+// The bool is false when no state has been saved for the key yet.
+func (s *RecentService) LoadChartUIState(ctx context.Context, key string) (domain.ChartUIState, bool, error) {
+	if key == "" {
+		return domain.ChartUIState{}, false, nil
+	}
+
+	data, err := s.store.Load(ctx)
+	if err != nil {
+		return domain.ChartUIState{}, false, fmt.Errorf("load chart ui state: %w", err)
+	}
+
+	st, ok := data.ChartUIStates[key]
+
+	return st, ok, nil
+}
+
+// maxChartUIStates caps the per-chart UI state map. The user can only
+// meaningfully come back to ~maxRecentCharts charts anyway; keeping ~5x
+// headroom covers charts that fell out of Recents but get reopened soon.
+const maxChartUIStates = 100
+
+// SaveChartUIState persists the UI state for the given chart key, stamping
+// LastTouchedAt with the current time. When the map grows past
+// maxChartUIStates, the entry with the oldest LastTouchedAt is evicted —
+// approximate LRU, so the most-recently-used charts survive. One eviction per
+// Save call is sufficient because the cap can only be exceeded by one entry.
+func (s *RecentService) SaveChartUIState(ctx context.Context, key string, st domain.ChartUIState) error {
+	if key == "" {
+		return nil
+	}
+
+	st.LastTouchedAt = time.Now()
+
+	if err := s.store.Update(ctx, func(data *storage.AppData) error {
+		if data.ChartUIStates == nil {
+			data.ChartUIStates = make(map[string]domain.ChartUIState)
+		}
+
+		data.ChartUIStates[key] = st
+
+		if len(data.ChartUIStates) > maxChartUIStates {
+			var (
+				oldestKey string
+				oldestAt  time.Time
+				seeded    bool
+			)
+
+			for k, v := range data.ChartUIStates {
+				if k == key {
+					continue
+				}
+
+				if !seeded || v.LastTouchedAt.Before(oldestAt) {
+					oldestKey = k
+					oldestAt = v.LastTouchedAt
+					seeded = true
+				}
+			}
+
+			if seeded {
+				delete(data.ChartUIStates, oldestKey)
+			}
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("save chart ui state: %w", err)
+	}
+
+	return nil
+}
+
 const maxRecentValuesEntries = 10
 
 // ListRecentValuesEntries returns all recent values+chart pairs.

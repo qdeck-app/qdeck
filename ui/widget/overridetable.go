@@ -84,6 +84,11 @@ type OverrideTable struct {
 	cellClicks []gesture.Click
 	HoveredRow int
 
+	// FocusedRow (visible filtered index) and FocusedCol (0-based override column)
+	// identify the cell to paint with a focus highlight. Set by the page each frame.
+	FocusedRow int
+	FocusedCol int
+
 	// Column resize drag state (same pattern as SplitView).
 	drag   bool
 	dragID pointer.ID
@@ -163,6 +168,21 @@ func columnGeometry(gtx layout.Context, leftW, dividerW, rightW, colCount int) c
 		colW:       colW,
 		rightStart: leftW + dividerW,
 	}
+}
+
+// columnBounds returns the x offset and width of sub-column c within the
+// right panel. The last column absorbs any remainder pixels from the integer
+// division in columnGeometry so the right edge lines up with rightW. rightW
+// is the total width of the right panel (identical to g.colW*g.count + g.totalDivW).
+func (g colGeometry) columnBounds(c, rightW int) (x, w int) {
+	x = g.rightStart + c*(g.colW+g.subDivW)
+	w = g.colW
+
+	if c == g.count-1 {
+		w = rightW - g.totalDivW - g.colW*(g.count-1)
+	}
+
+	return x, w
 }
 
 // overrideHint returns the editor placeholder for the given value type.
@@ -376,6 +396,20 @@ func (t *OverrideTable) layoutRow(
 		paintRowBg(gtx, dims.Size.Y, theme.ColorHover)
 	}
 
+	// Focus cell highlight: paint between the row background and the editor
+	// content so the editor text remains crisp on top of the tinted fill.
+	if !section && index == t.FocusedRow && t.FocusedCol >= 0 && t.FocusedCol < g.count {
+		colX, colW := g.columnBounds(t.FocusedCol, rightW)
+
+		rect := clip.Rect{
+			Min: image.Pt(colX, 0),
+			Max: image.Pt(colX+colW, dims.Size.Y),
+		}.Push(gtx.Ops)
+		paint.ColorOp{Color: theme.ColorFocus}.Add(gtx.Ops)
+		paint.PaintOp{}.Add(gtx.Ops)
+		rect.Pop()
+	}
+
 	// Replay content.
 	c.Add(gtx.Ops)
 
@@ -414,11 +448,7 @@ func (t *OverrideTable) layoutRightColumns(
 		col := c
 
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			w := g.colW
-			// Give any remainder pixels to the last column.
-			if col == g.count-1 {
-				w = rightW - g.totalDivW - g.colW*(g.count-1)
-			}
+			_, w := g.columnBounds(col, rightW)
 
 			gtx.Constraints.Min.X = w
 			gtx.Constraints.Max.X = w

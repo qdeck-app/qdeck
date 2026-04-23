@@ -13,10 +13,11 @@ import (
 
 // AppData is the top-level JSON structure persisted to disk.
 type AppData struct {
-	RecentCharts        []domain.RecentChart       `json:"recentCharts"`
-	RecentValues        []domain.RecentValuesFile  `json:"recentValues"`
-	RecentValuesEntries []domain.RecentValuesEntry `json:"recentValuesEntries,omitempty"`
-	ShowComments        *bool                      `json:"showComments,omitempty"`
+	RecentCharts        []domain.RecentChart           `json:"recentCharts"`
+	RecentValues        []domain.RecentValuesFile      `json:"recentValues"`
+	RecentValuesEntries []domain.RecentValuesEntry     `json:"recentValuesEntries,omitempty"`
+	ShowComments        *bool                          `json:"showComments,omitempty"`
+	ChartUIStates       map[string]domain.ChartUIState `json:"chartUiStates,omitempty"`
 }
 
 // JSONStore reads and writes AppData to a JSON file.

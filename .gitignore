@@ -32,3 +32,6 @@ go.work.sum
 # .vscode/
 
 .DS_Store
+
+# Local dev build output (project binary produced by `go build`)
+/qdeck

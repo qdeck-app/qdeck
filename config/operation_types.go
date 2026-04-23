@@ -28,6 +28,7 @@ const (
 	RecentChartsLoadOperation
 	RecentValuesLoadOperation
 	RecentValuesEntriesLoadOperation
+	ChartUIStateLoadOperation
 
 	// Git operations
 	GitCompareOperation

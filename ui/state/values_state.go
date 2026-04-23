@@ -169,9 +169,18 @@ type ValuesPageState struct {
 	FilteredIndices []int
 	FocusSearch     bool
 
-	// Cell navigation state
-	FocusedRow int
-	FocusedCol int
+	// Cell navigation state.
+	// FocusedRow indexes FilteredIndices (not Entries); FocusedCol indexes
+	// active override columns. PendingFocusKey holds a restored entry key that
+	// has not yet been resolved to a row — Page.Layout consumes it after
+	// FilteredIndices is computed and clears it. PendingFocusHighlight asks
+	// Page.Layout to issue a key.FocusCmd on the highlighted editor on the
+	// next frame (set by the controller on chart load); Layout clears it
+	// after dispatch.
+	FocusedRow            int
+	FocusedCol            int
+	PendingFocusKey       string
+	PendingFocusHighlight bool
 
 	// +Values button
 	AddColumnButton widget.Clickable
@@ -201,6 +210,14 @@ type ValuesPageState struct {
 	// Helm install command (cached, rebuilt on chart/file changes)
 	HelmInstallCmd    string
 	CopyInstallButton widget.Clickable
+}
+
+// ChartKey returns a stable identifier for the currently loaded chart, used as
+// the persistence key for per-chart UI state. Returns "" if no chart is loaded.
+// Delegates to domain.ChartKey so the shape stays in sync with other callers
+// (e.g. RecentChart.ChartKey) that need to address the same entry.
+func (s *ValuesPageState) ChartKey() string {
+	return domain.ChartKey(s.RepoName, s.ChartName, s.OciRef, s.ChartPath, s.Version)
 }
 
 // HasUnsavedChanges returns true if any active column has unsaved modifications.

@@ -80,6 +80,7 @@ type ValuesController struct {
 	ExportRunner         *async.Runner[string]
 	RecentValuesRunner   *async.Runner[[]domain.RecentValuesFile]
 	FilePickerRunner     *async.Runner[filePickerResult]
+	ChartUIStateRunner   *async.Runner[chartUIStateResult]
 
 	// CustomDecor indicates that windows should use custom decorations (Linux/Windows).
 	CustomDecor bool
@@ -110,7 +111,33 @@ type ValuesController struct {
 	overwriteDialogActive bool
 	overwritePendingCol   int
 	overwritePendingYAML  string
+
+	// focusSaver debounces per-chart cell-focus writes to avoid rewriting the
+	// whole AppData JSON on every arrow-key frame.
+	focusSaver *async.Debouncer[chartFocusJob]
 }
+
+// chartFocusJob is the payload coalesced by focusSaver: the most recent
+// (chartKey, state) pair observed during the debounce window.
+type chartFocusJob struct {
+	chartKey string
+	state    domain.ChartUIState
+}
+
+// chartUIStateResult is the async result of a per-chart UI-state load. The
+// chartKey pins the result to a specific chart so late deliveries after a
+// fast repo switch can be discarded (Runner generation counter already drops
+// cancelled results, but pinning is cheap and makes intent explicit).
+type chartUIStateResult struct {
+	chartKey string
+	state    domain.ChartUIState
+	found    bool
+}
+
+// cellFocusSaveDelay is the quiet window after the last focus change before
+// the state is written. Long enough to coalesce held-arrow-key bursts, short
+// enough that the last position hits disk before the user closes the app.
+const cellFocusSaveDelay = 300 * time.Millisecond
 
 func newValuesController(
 	w *app.Window,
@@ -142,6 +169,7 @@ func newValuesController(
 	vc.ExportRunner = async.NewRunner[string](w, 1)
 	vc.RecentValuesRunner = async.NewRunner[[]domain.RecentValuesFile](w, 1)
 	vc.FilePickerRunner = async.NewRunner[filePickerResult](w, 1)
+	vc.ChartUIStateRunner = async.NewRunner[chartUIStateResult](w, 1)
 
 	for i := range vc.CustomValuesRunners {
 		vc.CustomValuesRunners[i] = async.NewRunner[*service.FlatValues](w, 1)
@@ -152,7 +180,19 @@ func newValuesController(
 	vc.overwriteDialog.YesButton = &vc.overwriteDialogYes
 	vc.overwriteDialog.NoButton = &vc.overwriteDialogNo
 
+	vc.focusSaver = async.NewDebouncer(cellFocusSaveDelay, func(j chartFocusJob) {
+		if err := recentSvc.SaveChartUIState(context.Background(), j.chartKey, j.state); err != nil {
+			slog.Error("save chart ui state", "error", err, "key", j.chartKey)
+		}
+	})
+
 	return vc
+}
+
+// Shutdown flushes any debounced writes so the last scheduled state reaches
+// disk before the process exits. Call once from the app's shutdown path.
+func (vc *ValuesController) Shutdown() {
+	vc.focusSaver.Flush()
 }
 
 func (vc *ValuesController) Callbacks() page.ValuesPageCallbacks {
@@ -173,6 +213,7 @@ func (vc *ValuesController) Callbacks() page.ValuesPageCallbacks {
 		OnRenderOverrides:       vc.onRenderOverrides,
 		OnKeyCopied:             vc.onKeyCopied,
 		OnShowCommentsChanged:   vc.onShowCommentsChanged,
+		OnCellFocusChanged:      vc.onCellFocusChanged,
 	}
 }
 
@@ -187,6 +228,7 @@ func (vc *ValuesController) PollAsync() {
 	vc.pollRenderRunner()
 	vc.pollExportRunner()
 	vc.pollFilePicker()
+	vc.pollChartUIState()
 }
 
 func (vc *ValuesController) pollDefaultValues() {
@@ -197,6 +239,12 @@ func (vc *ValuesController) pollDefaultValues() {
 			vc.NotifState.Show(res.Err.Error(), state.NotificationError, time.Now())
 		} else {
 			vc.State.DefaultValues = res.Value
+
+			// Restore the previously focused cell for this chart so the user
+			// resumes where they left off across app restarts. Load is async
+			// to avoid blocking the frame loop on a file read that may
+			// contend with the debounced save mutex.
+			vc.loadSavedCellFocusAsync()
 
 			// Pre-allocate editors for all columns so +Values is instant.
 			entryCount := len(res.Value.Entries)
@@ -431,6 +479,7 @@ func (vc *ValuesController) ResetState() {
 	vc.DefaultValuesRunner.Stop()
 	vc.RenderTemplateRunner.Stop()
 	vc.ExportRunner.Stop()
+	vc.ChartUIStateRunner.Stop()
 
 	for i := range vc.CustomValuesRunners {
 		vc.CustomValuesRunners[i].Stop()
@@ -444,6 +493,10 @@ func (vc *ValuesController) ResetState() {
 	vc.lastRenderMode = renderNone
 	vc.State.Loading = true
 	vc.State.DefaultValues = nil
+	vc.State.PendingFocusKey = ""
+	vc.State.PendingFocusHighlight = false
+	vc.State.FocusedRow = 0
+	vc.State.FocusedCol = 0
 
 	for i := range vc.State.DefaultValueEditors {
 		vc.State.DefaultValueEditors[i].SetText("")
@@ -997,4 +1050,74 @@ func (vc *ValuesController) onShowCommentsChanged(show bool) {
 			slog.Error("save show comments preference", "error", err)
 		}
 	}()
+}
+
+func (vc *ValuesController) onCellFocusChanged(entryKey string, col int) {
+	chartKey := vc.State.ChartKey()
+	if chartKey == "" {
+		return
+	}
+
+	// Debounce the disk write: arrow-key nav can fire focus changes per frame,
+	// and each save rewrites the whole AppData JSON. focusSaver coalesces
+	// rapid changes into a single write after the user settles.
+	vc.focusSaver.Schedule(chartFocusJob{
+		chartKey: chartKey,
+		state:    domain.ChartUIState{FocusedKey: entryKey, FocusedCol: col},
+	})
+}
+
+// loadSavedCellFocusAsync dispatches a background load of this chart's
+// persisted UI state. Results are applied by pollChartUIState so the frame
+// loop is never blocked on disk I/O. Safe to call only after
+// State.RepoName/ChartName/etc. are set — the key is captured at dispatch
+// time so a concurrent ResetState cannot race with the goroutine.
+func (vc *ValuesController) loadSavedCellFocusAsync() {
+	key := vc.State.ChartKey()
+	if key == "" {
+		return
+	}
+
+	recentSvc := vc.RecentService
+
+	vc.ChartUIStateRunner.RunWithTimeout(config.ChartUIStateLoadOperation, func(ctx context.Context) (chartUIStateResult, error) {
+		st, ok, err := recentSvc.LoadChartUIState(ctx, key)
+		if err != nil {
+			return chartUIStateResult{}, fmt.Errorf("load chart ui state: %w", err)
+		}
+
+		return chartUIStateResult{chartKey: key, state: st, found: ok}, nil
+	})
+}
+
+// pollChartUIState applies a completed UI-state load to the page state. The
+// result is discarded when the user has navigated to a different chart
+// mid-flight (the captured key no longer matches). Keyboard focus is only
+// grabbed into an editor when saved state was actually found — first-time
+// chart loads leave focus free so unmodified arrow keys aren't captured by
+// the editor the user hasn't chosen yet.
+func (vc *ValuesController) pollChartUIState() {
+	res, ok := vc.ChartUIStateRunner.Poll()
+	if !ok {
+		return
+	}
+
+	if res.Err != nil {
+		slog.Error("load chart ui state", "error", res.Err)
+
+		return
+	}
+
+	// Drop stale deliveries: the chart changed while the load was in flight.
+	if res.Value.chartKey != vc.State.ChartKey() {
+		return
+	}
+
+	if !res.Value.found {
+		return
+	}
+
+	vc.State.PendingFocusKey = res.Value.state.FocusedKey
+	vc.State.FocusedCol = res.Value.state.FocusedCol
+	vc.State.PendingFocusHighlight = true
 }
