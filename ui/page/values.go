@@ -73,6 +73,11 @@ const (
 	// scrollContextRows is how many rows of context to show above a
 	// scrolled-into-view target row (cell navigation, restored focus).
 	scrollContextRows = 2
+
+	// Hotkey + color-legend hint shown in the notification bar's idle slot.
+	helpLegendItemGap    unit.Dp = 10
+	helpGlyphTextGap     unit.Dp = 3
+	helpShortcutTrailGap unit.Dp = 10
 )
 
 // cellNavMod is the modifier for arrow-key cell navigation. On macOS we use
@@ -88,6 +93,15 @@ var cellNavMod = func() key.Modifiers {
 
 	return key.ModAlt
 }()
+
+// helpShortcutLine renders the hotkey help using native glyphs per platform:
+// Mac gets modifier/tab symbols, Windows/Linux gets spelled-out names.
+//
+//nolint:gochecknoglobals // platform-specific hint resolved once at init
+var helpShortcutLine = customwidget.ShortcutLabel(
+	"Ctrl+Shift+Arrows to navigate \u00b7 Tab/Shift+Tab indent \u00b7 ",
+	"Alt+Arrows to navigate \u00b7 Tab/Shift+Tab indent \u00b7 ",
+)
 
 // ValuesPageCallbacks bundles every callback the ValuesPage needs from its controller.
 type ValuesPageCallbacks struct {
@@ -1454,4 +1468,53 @@ func (p *ValuesPage) outdentFocusedEditor(gtx layout.Context) {
 	}
 
 	ed.SetCaret(adjust(start), adjust(end))
+}
+
+// LayoutShortcutsHelp renders a single-line hotkey + color legend hint, sized
+// to fit the notification bar's idle slot. Called from the app shell when the
+// values page is active and no notification is showing.
+func (p *ValuesPage) LayoutShortcutsHelp(gtx layout.Context) layout.Dimensions {
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Body2(p.Theme, helpShortcutLine)
+			lbl.Color = theme.ColorSecondary
+			lbl.MaxLines = 1
+
+			return customwidget.LayoutLabel(gtx, lbl)
+		}),
+		layout.Rigid(layout.Spacer{Width: helpShortcutTrailGap}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return p.layoutLegendItem(gtx, theme.ColorScrollMarker, "override")
+		}),
+		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return p.layoutLegendItem(gtx, theme.ColorGitAddedBar, "git added")
+		}),
+		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return p.layoutLegendItem(gtx, theme.ColorGitModifiedBar, "git modified")
+		}),
+	)
+}
+
+// layoutLegendItem renders an inline colored square glyph followed by the
+// label text. Both are Caption-sized, baseline-aligned — the glyph shapes and
+// positions like any letter, avoiding icon-vs-text alignment hacks.
+func (p *ValuesPage) layoutLegendItem(gtx layout.Context, c color.NRGBA, label string) layout.Dimensions {
+	return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			sq := material.Body2(p.Theme, "\u25a0") // ■
+			sq.Color = c
+
+			return customwidget.LayoutLabel(gtx, sq)
+		}),
+		layout.Rigid(layout.Spacer{Width: helpGlyphTextGap}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Body2(p.Theme, label)
+			lbl.Color = theme.ColorSecondary
+			lbl.MaxLines = 1
+
+			return customwidget.LayoutLabel(gtx, lbl)
+		}),
+	)
 }

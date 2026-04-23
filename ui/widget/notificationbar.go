@@ -34,11 +34,34 @@ type NotificationBar struct{}
 
 // Layout renders the notification bar. It always returns a fixed height
 // regardless of whether a notification is active, preventing layout shifts.
-func (n *NotificationBar) Layout(gtx layout.Context, th *material.Theme, notif *state.NotificationState) layout.Dimensions {
+// When no notification is active and idleHint is non-nil, the hint is rendered
+// in the otherwise-empty bar (e.g. page-specific keyboard help).
+func (n *NotificationBar) Layout(
+	gtx layout.Context, th *material.Theme,
+	notif *state.NotificationState, idleHint layout.Widget,
+) layout.Dimensions {
 	barH := gtx.Dp(notificationBarHeight)
 	fixedSize := image.Pt(gtx.Constraints.Max.X, barH)
 
 	if !notif.Active {
+		if idleHint == nil {
+			return layout.Dimensions{Size: fixedSize}
+		}
+
+		// Reserve the fixed bar size but let the hint lay out at its natural
+		// size vertically centered; forcing Min.Y into the children makes
+		// captions and nested baseline-aligned Flexes render at divergent
+		// Y positions within their oversized boxes (visual "two lines").
+		gtx.Constraints.Min = image.Point{}
+		gtx.Constraints.Max = fixedSize
+
+		layout.W.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{
+				Left: notificationPaddingH, Right: notificationPaddingH,
+				Top: notificationPaddingV,
+			}.Layout(gtx, idleHint)
+		})
+
 		return layout.Dimensions{Size: fixedSize}
 	}
 

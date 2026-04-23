@@ -343,6 +343,16 @@ func layoutPanelLabel(gtx layout.Context, th *material.Theme, text string, top, 
 	})
 }
 
+// layoutHelpHint renders a single-line muted Body2 caption used by per-page
+// LayoutShortcutsHelp methods to fill the notification bar's idle slot.
+func layoutHelpHint(gtx layout.Context, th *material.Theme, text string) layout.Dimensions {
+	lbl := material.Body2(th, text)
+	lbl.Color = theme.ColorSecondary
+	lbl.MaxLines = 1
+
+	return customwidget.LayoutLabel(gtx, lbl)
+}
+
 const (
 	hotkeyHintPadH   unit.Dp = 6
 	hotkeyHintPadV   unit.Dp = 2

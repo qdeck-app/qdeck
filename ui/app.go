@@ -391,7 +391,18 @@ func (a *Application) layout(gtx layout.Context) layout.Dimensions {
 					return a.layoutBreadcrumbRow(gtx)
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return a.notificationBar.Layout(gtx, a.theme, &a.notificationState)
+					var idleHint layout.Widget
+
+					switch a.navState.CurrentPage {
+					case state.PageValues:
+						idleHint = a.valuesPage.LayoutShortcutsHelp
+					case state.PageCharts:
+						idleHint = a.chartsPage.LayoutShortcutsHelp
+					case state.PageRepos:
+						idleHint = a.reposPage.LayoutShortcutsHelp
+					}
+
+					return a.notificationBar.Layout(gtx, a.theme, &a.notificationState, idleHint)
 				}),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					a.repoState.PageContentTop = windowH - gtx.Constraints.Max.Y
