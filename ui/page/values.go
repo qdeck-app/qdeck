@@ -69,6 +69,10 @@ const (
 
 	copyLabel                    = "Copy"
 	helmCmdMaxWidthRatio float32 = 0.35 // fraction of row width reserved for helm command
+
+	// scrollContextRows is how many rows of context to show above a
+	// scrolled-into-view target row (cell navigation, restored focus).
+	scrollContextRows = 2
 )
 
 // cellNavMod is the modifier for arrow-key cell navigation. On macOS we use
@@ -103,6 +107,10 @@ type ValuesPageCallbacks struct {
 	OnRenderOverrides       func()
 	OnKeyCopied             func(key string)
 	OnShowCommentsChanged   func(show bool)
+	// OnCellFocusChanged fires when (FocusedRow, FocusedCol) actually change.
+	// entryKey is the flat key of the focused entry (stable across sessions
+	// and filter changes); empty when no entry is resolvable at row.
+	OnCellFocusChanged func(entryKey string, col int)
 }
 
 // ValuesPage renders the unified override editor: default values on the left,
@@ -132,6 +140,12 @@ type ValuesPage struct {
 
 	// recentDropdownChildren avoids per-frame allocation in recentDropdownItems.
 	recentDropdownChildren [maxRecentValues]layout.FlexChild
+
+	// lastFocusedRow / lastFocusedCol cache the most recently observed focus
+	// so OnCellFocusChanged fires only on actual changes, not every frame.
+	// Seeded by NewValuesPage from the existing state to avoid spurious fires.
+	lastFocusedRow int
+	lastFocusedCol int
 }
 
 func NewValuesPage(th *material.Theme, st *state.ValuesPageState, cb ValuesPageCallbacks) *ValuesPage {
@@ -147,6 +161,8 @@ func NewValuesPage(th *material.Theme, st *state.ValuesPageState, cb ValuesPageC
 		},
 		Search:              customwidget.SearchBar{Editor: &st.SearchEditor},
 		ValuesPageCallbacks: cb,
+		lastFocusedRow:      st.FocusedRow,
+		lastFocusedCol:      st.FocusedCol,
 	}
 }
 
@@ -171,6 +187,13 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	p.handleKeyEvents(gtx)
 
 	if p.State.DefaultValues == nil {
+		// No chart loaded: keep lastFocused synced to state so the next chart
+		// load starts from a clean baseline. Without this, ResetState's zeroed
+		// focus would look like a "change" vs. the previous chart's cached
+		// values and fire a spurious OnCellFocusChanged on the first frame.
+		p.lastFocusedRow = p.State.FocusedRow
+		p.lastFocusedCol = p.State.FocusedCol
+
 		if p.State.Loading {
 			return layoutCenteredLoading(gtx, p.Theme)
 		}
@@ -239,9 +262,101 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		p.State.FilteredIndices,
 	)
 
+	// Resolve a pending restored focus key to a filtered row. If the key is no
+	// longer visible (filtered out or removed from the chart), drop the
+	// pending key and fall through to the clamps below.
+	if p.State.PendingFocusKey != "" {
+		entries := p.State.DefaultValues.Entries
+		for r, idx := range p.State.FilteredIndices {
+			if idx < len(entries) && entries[idx].Key == p.State.PendingFocusKey {
+				p.State.FocusedRow = r
+
+				break
+			}
+		}
+
+		p.State.PendingFocusKey = ""
+	}
+
 	// Clamp focused row to stay within filtered bounds.
 	if p.State.FocusedRow >= len(p.State.FilteredIndices) {
 		p.State.FocusedRow = max(0, len(p.State.FilteredIndices)-1)
+	}
+
+	// Clamp focused column in case columns were removed.
+	if p.State.FocusedCol >= p.State.ColumnCount {
+		p.State.FocusedCol = max(0, p.State.ColumnCount-1)
+	}
+
+	// If the focused row points at a section header (e.g. default zero value
+	// on first load), advance to the first non-section row so the initial
+	// highlight lands on an editable cell.
+	if len(p.State.FilteredIndices) > 0 && p.State.FocusedRow >= 0 {
+		entries := p.State.DefaultValues.Entries
+		filtered := p.State.FilteredIndices
+
+		if idx := filtered[p.State.FocusedRow]; idx < len(entries) && entries[idx].IsSection() {
+			for r, fi := range filtered {
+				if fi < len(entries) && !entries[fi].IsSection() {
+					p.State.FocusedRow = r
+
+					break
+				}
+			}
+		}
+	}
+
+	p.Table.FocusedRow = p.State.FocusedRow
+	p.Table.FocusedCol = p.State.FocusedCol
+
+	// When the controller signals a pending focus highlight (fires once per
+	// chart load after the async UI-state load completes), focus the
+	// highlighted cell's editor so the user can start typing without having
+	// to click. Guarded on the search editor not being focused so a user who
+	// clicked Search while the chart was loading keeps their focus intact.
+	if p.State.PendingFocusHighlight {
+		p.State.PendingFocusHighlight = false
+
+		if p.State.FocusedRow >= 0 && p.State.FocusedRow < len(p.State.FilteredIndices) {
+			// Scroll the restored row into view; otherwise the highlight
+			// lands off-screen and the user sees an unscrolled list with no
+			// visible focus indicator.
+			p.State.OverrideList.Position.First = max(0, p.State.FocusedRow-scrollContextRows)
+			p.State.OverrideList.Position.Offset = 0
+		}
+
+		if !gtx.Focused(p.Search.Editor) &&
+			p.State.ColumnCount > 0 &&
+			p.State.FocusedRow >= 0 && p.State.FocusedRow < len(p.State.FilteredIndices) &&
+			p.State.FocusedCol >= 0 && p.State.FocusedCol < p.State.ColumnCount {
+			entryIdx := p.State.FilteredIndices[p.State.FocusedRow]
+			editors := p.State.Columns[p.State.FocusedCol].OverrideEditors
+
+			if entryIdx < len(editors) {
+				gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
+			}
+		}
+
+		// Treat the restored focus as already-synced so we don't immediately
+		// re-persist it back to disk on the next change-detection check.
+		p.lastFocusedRow = p.State.FocusedRow
+		p.lastFocusedCol = p.State.FocusedCol
+	} else if p.State.FocusedRow != p.lastFocusedRow || p.State.FocusedCol != p.lastFocusedCol {
+		p.lastFocusedRow = p.State.FocusedRow
+		p.lastFocusedCol = p.State.FocusedCol
+
+		if p.OnCellFocusChanged != nil {
+			var entryKey string
+
+			entries := p.State.DefaultValues.Entries
+			if p.State.FocusedRow >= 0 && p.State.FocusedRow < len(p.State.FilteredIndices) {
+				if idx := p.State.FilteredIndices[p.State.FocusedRow]; idx < len(entries) {
+					entryKey = entries[idx].Key
+				}
+			}
+
+			p.OnCellFocusChanged(entryKey, p.State.FocusedCol)
+		}
 	}
 
 	// Ensure recent values clickables are allocated.
@@ -1163,7 +1278,7 @@ func (p *ValuesPage) moveCellFocusRow(gtx layout.Context, delta int) {
 		}
 	}
 
-	p.State.OverrideList.Position.First = max(0, row-2) //nolint:mnd // show 2 rows above
+	p.State.OverrideList.Position.First = max(0, row-scrollContextRows)
 }
 
 // moveCellFocusCol moves keyboard focus to the next/previous column on the
@@ -1229,7 +1344,7 @@ func (p *ValuesPage) moveCellFocusCol(gtx layout.Context, delta int) {
 		gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
 	}
 
-	p.State.OverrideList.Position.First = max(0, row-2) //nolint:mnd // show 2 rows above
+	p.State.OverrideList.Position.First = max(0, row-scrollContextRows)
 }
 
 // focusedEditor returns the override editor at (FocusedRow, FocusedCol) along

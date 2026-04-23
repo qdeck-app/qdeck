@@ -198,6 +198,7 @@ func (a *Application) Run() error {
 	defer a.cancelPreload()
 	defer a.nativeDrop.Close()
 	defer a.closeGuard.Close()
+	defer a.valuesCtrl.Shutdown()
 
 	for {
 		e := a.window.Event()
