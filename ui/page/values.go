@@ -101,8 +101,8 @@ var cellNavMod = func() key.Modifiers {
 //
 //nolint:gochecknoglobals // platform-specific hint resolved once at init
 var helpShortcutLine = customwidget.ShortcutLabel(
-	"Ctrl+Shift+Arrows nav \u00b7 Tab/Shift+Tab indent \u00b7 \u2318+/ fold \u00b7 \u2318+Shift+/ expand all \u00b7 ",
-	"Alt+Arrows nav \u00b7 Tab/Shift+Tab indent \u00b7 Ctrl+/ fold \u00b7 Ctrl+Shift+/ expand all \u00b7 ",
+	"Ctrl+Shift+Arrows nav \u00b7 Tab/Shift+Tab indent \u00b7 \u2318+/ fold \u00b7 ",
+	"Alt+Arrows nav \u00b7 Tab/Shift+Tab indent \u00b7 Ctrl+/ fold \u00b7 ",
 )
 
 // ValuesPageCallbacks bundles every callback the ValuesPage needs from its controller.
@@ -1356,7 +1356,6 @@ func (p *ValuesPage) handleKeyEvents(gtx layout.Context) {
 			key.Filter{Name: key.NameTab},
 			key.Filter{Name: key.NameTab, Required: key.ModShift},
 			key.Filter{Name: "/", Required: key.ModShortcut},
-			key.Filter{Name: "/", Required: key.ModShortcut | key.ModShift},
 		)
 		if !ok {
 			break
@@ -1383,33 +1382,9 @@ func (p *ValuesPage) handleKeyEvents(gtx layout.Context) {
 				p.indentFocusedEditor(gtx)
 			}
 		case "/":
-			if e.Modifiers.Contain(key.ModShift) {
-				p.handleExpandAllShortcut(gtx)
-			} else {
-				p.handleCollapseShortcut(gtx)
-			}
+			p.handleCollapseShortcut(gtx)
 		}
 	}
-}
-
-// handleExpandAllShortcut clears every collapsed section at once. Useful as
-// an "I give up, show me everything" escape hatch so users never have to
-// keyboard-navigate to each collapsed chevron in a deep tree.
-func (p *ValuesPage) handleExpandAllShortcut(gtx layout.Context) {
-	if len(p.State.CollapsedKeys) == 0 && len(p.State.CollapsedPreSearch) == 0 {
-		return
-	}
-
-	clear(p.State.CollapsedKeys)
-	// Mirror into the snapshot so a search clear doesn't re-collapse what the
-	// user just asked to expand.
-	clear(p.State.CollapsedPreSearch)
-
-	if p.OnCollapseChanged != nil {
-		p.OnCollapseChanged()
-	}
-
-	gtx.Execute(op.InvalidateCmd{})
 }
 
 // handleCollapseShortcut toggles the collapsed state of the section enclosing

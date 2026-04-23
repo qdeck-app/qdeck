@@ -399,9 +399,7 @@ func (t *OverrideTable) layoutRow(
 	// Register click gesture for the right cell and set text cursor.
 	t.cellClicks[index].Add(gtx.Ops)
 
-	if !section {
-		t.handleCellClick(gtx, index, entryIdx, entry.Key, g, rightW, dims.Size.Y)
-	}
+	t.handleCellClick(gtx, index, entryIdx, entry.Key, g, rightW, dims.Size.Y, section)
 
 	// Override highlight or hover background.
 	hasOverride := !section && t.hasAnyOverride(entryIdx)
@@ -598,7 +596,8 @@ func (t *OverrideTable) processEditorChanges(
 }
 
 // handleCellClick focuses the correct column editor when a right-cell click occurs,
-// or copies the field key to clipboard when the left key area is clicked.
+// or copies the field key to clipboard when the left key area is clicked. For
+// section rows the whole row copies the key since there are no value cells.
 func (t *OverrideTable) handleCellClick(
 	gtx layout.Context,
 	index int,
@@ -607,6 +606,7 @@ func (t *OverrideTable) handleCellClick(
 	g colGeometry,
 	rightW int,
 	rowH int,
+	section bool,
 ) {
 	for {
 		ev, ok := t.cellClicks[index].Update(gtx.Source)
@@ -619,8 +619,8 @@ func (t *OverrideTable) handleCellClick(
 		}
 
 		clickX := ev.Position.X
-		if clickX < g.rightStart {
-			// Left-side click: copy the full key path to clipboard.
+		if section || clickX < g.rightStart {
+			// Left-side click (or anywhere on a section row): copy the key path.
 			gtx.Execute(clipboard.WriteCmd{
 				Type: "text/plain",
 				Data: io.NopCloser(strings.NewReader(entryKey)),
@@ -654,11 +654,20 @@ func (t *OverrideTable) handleCellClick(
 		}
 	}
 
-	// Show pointer cursor over the left key area (click-to-copy).
+	// Show pointer cursor over the left key area (click-to-copy). For section
+	// rows the entire row is clickable, so the pointer cursor spans it.
 	keyW := g.leftW / 2 //nolint:mnd // key column is half of the left panel
+	if section {
+		keyW = g.rightStart + rightW
+	}
+
 	keyArea := clip.Rect{Max: image.Pt(keyW, rowH)}.Push(gtx.Ops)
 	pointer.CursorPointer.Add(gtx.Ops)
 	keyArea.Pop()
+
+	if section {
+		return
+	}
 
 	// Show text cursor over the right cell area.
 	rightArea := clip.Rect{
