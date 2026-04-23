@@ -623,6 +623,13 @@ func (p *ReposPage) layoutOverlay(gtx layout.Context) layout.Dimensions {
 	return p.confirmDialog.Layout(gtx, p.Theme, "Delete repository "+p.State.ConfirmDeleteName+"?")
 }
 
+// LayoutShortcutsHelp renders the keyboard hint for this page in the
+// notification bar's idle slot.
+func (p *ReposPage) LayoutShortcutsHelp(gtx layout.Context) layout.Dimensions {
+	return layoutHelpHint(gtx, p.Theme,
+		"Arrows to navigate \u00b7 Enter to select repo \u00b7 Tab/Shift+Tab between sections")
+}
+
 func (p *ReposPage) handleKeyEvents(gtx layout.Context) {
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
 	event.Op(gtx.Ops, p)

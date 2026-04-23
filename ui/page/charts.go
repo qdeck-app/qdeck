@@ -229,6 +229,13 @@ func (p *ChartsPage) layoutVersions(gtx layout.Context) layout.Dimensions {
 	)
 }
 
+// LayoutShortcutsHelp renders the keyboard hint for this page in the
+// notification bar's idle slot.
+func (p *ChartsPage) LayoutShortcutsHelp(gtx layout.Context) layout.Dimensions {
+	return layoutHelpHint(gtx, p.Theme,
+		"Arrows to navigate \u00b7 Enter to select chart \u00b7 Tab to focus search")
+}
+
 func (p *ChartsPage) handleKeyEvents(gtx layout.Context) {
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
 	event.Op(gtx.Ops, p)
