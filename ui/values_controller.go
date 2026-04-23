@@ -248,22 +248,7 @@ func (vc *ValuesController) pollDefaultValues() {
 			// contend with the debounced save mutex.
 			vc.loadSavedCellFocusAsync()
 
-			// Pre-allocate editors for all columns so +Values is instant.
-			entryCount := len(res.Value.Entries)
-			for i := range vc.State.Columns {
-				vc.State.Columns[i].EnsureEditors(entryCount)
-			}
-
-			// Pre-allocate read-only editors for default value selection/copy.
-			vc.State.EnsureDefaultEditors(entryCount)
-
-			for i, entry := range res.Value.Entries {
-				ed := &vc.State.DefaultValueEditors[i]
-				ed.ReadOnly = true
-				ed.SingleLine = true
-				ed.Alignment = text.End
-				ed.SetText(entry.Value)
-			}
+			vc.rebuildEntries(-1)
 
 			// Auto-load a values file queued from the repos page drop zone.
 			if vc.NavState.PendingValuesPath != "" {
@@ -279,6 +264,67 @@ func (vc *ValuesController) pollDefaultValues() {
 	}
 }
 
+// rebuildEntries recomputes the unified entry list (chart defaults merged with
+// custom-only keys from active columns), resizes and re-aligns the default and
+// per-column editor slices by flat key, and refreshes the read-only default-
+// value cells. No-op when nothing changed, so it's cheap to call from any
+// source-mutation point.
+//
+// skipRealignCol (-1 for none) suppresses the by-key realign pass for one
+// column — used by callers that will authoritatively repopulate that column's
+// editors from its CustomValues immediately afterward (see pollCustomValues),
+// so shifting stale text around would just be wasted work.
+func (vc *ValuesController) rebuildEntries(skipRealignCol int) {
+	oldEntries, changed := vc.State.RebuildUnifiedEntries()
+	if !changed {
+		return
+	}
+
+	newLen := len(vc.State.Entries)
+
+	// Pre-allocate editors for every column (active + inactive) so +Values is
+	// instant and arrow-key nav never races an editor realloc.
+	vc.State.EnsureDefaultEditors(newLen)
+
+	for c := range vc.State.Columns {
+		vc.State.Columns[c].EnsureEditors(newLen)
+	}
+
+	// Default-side is read-only and purely derived from entry.Value; re-apply
+	// configuration so freshly grown slots behave as read-only selectable
+	// cells too. Slots past newLen are cleared so leftover text from a prior
+	// (longer) entry list never bleeds into the DOM.
+	for i := range vc.State.DefaultValueEditors {
+		ed := &vc.State.DefaultValueEditors[i]
+		ed.ReadOnly = true
+		ed.SingleLine = true
+		ed.Alignment = text.End
+
+		if i < newLen {
+			ed.SetText(vc.State.Entries[i].Value)
+		} else {
+			ed.SetText("")
+		}
+	}
+
+	// Realign per-column override editors by flat key so user-entered text
+	// survives when the unified list grows or shrinks (e.g. loading a custom
+	// file into column 2 introduces keys that shift column 1's indices).
+	for c := range vc.State.Columns {
+		if c == skipRealignCol {
+			continue
+		}
+
+		col := &vc.State.Columns[c]
+		vc.State.RealignEditorTextByKey(oldEntries, col.OverrideEditors)
+		col.RebuildOverrideFlags()
+
+		if len(col.OverrideEditors) > 0 {
+			col.DrainPendingChanges = true
+		}
+	}
+}
+
 func (vc *ValuesController) pollCustomValues() {
 	for i := range vc.CustomValuesRunners {
 		if res, ok := vc.CustomValuesRunners[i].Poll(); ok {
@@ -289,6 +335,12 @@ func (vc *ValuesController) pollCustomValues() {
 			} else {
 				col.CustomValues = res.Value
 
+				// Rebuild the unified entry list first so custom-only keys
+				// get rows and editor slots before populateColumnOverrides
+				// tries to set their text. Skip realign for column i because
+				// populateColumnOverrides is about to authoritatively rewrite
+				// every editor in that column from the just-loaded file.
+				vc.rebuildEntries(i)
 				vc.populateColumnOverrides(i)
 				vc.triggerGitCompare(i)
 			}
@@ -347,6 +399,13 @@ func (vc *ValuesController) pollEditorParse() {
 				}
 
 				col.CustomValues = res.Value
+
+				// Rebuild the unified entry list: cell edits can introduce
+				// keys that weren't in defaults (e.g. pasting a nested map
+				// expands into new flat keys). Realign the typing column too
+				// (no skip) — its editor text is the source of truth here, and
+				// realign's text-equality guard keeps the active caret intact.
+				vc.rebuildEntries(-1)
 			}
 		}
 	}
@@ -495,6 +554,7 @@ func (vc *ValuesController) ResetState() {
 	vc.lastRenderMode = renderNone
 	vc.State.Loading = true
 	vc.State.DefaultValues = nil
+	vc.State.Entries = nil
 	vc.State.PendingFocusKey = ""
 	vc.State.PendingFocusHighlight = false
 	vc.State.FocusedRow = 0
@@ -698,7 +758,7 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 
 	col := &vc.State.Columns[colIdx]
 
-	yamlText, err := state.OverridesToYAML(vc.State.DefaultValues.Entries, col.OverrideEditors, col.YAMLIndent())
+	yamlText, err := state.OverridesToYAML(vc.State.Entries, col.OverrideEditors, col.YAMLIndent())
 	if err != nil {
 		vc.NotifState.Show(err.Error(), state.NotificationError, time.Now())
 
@@ -819,6 +879,9 @@ func (vc *ValuesController) onClearColumn(colIdx int) {
 	vc.GitCompareRunners[colIdx].Stop()
 	vc.State.Columns[colIdx].Reset()
 	vc.State.RebuildHelmInstallCmd()
+	// Cleared custom file may have contributed custom-only keys to the
+	// unified entries; drop them and re-align remaining columns' editors.
+	vc.rebuildEntries(-1)
 }
 
 func (vc *ValuesController) onRemoveColumn(colIdx int) {
@@ -845,6 +908,11 @@ func (vc *ValuesController) onRemoveColumn(colIdx int) {
 	vc.GitCompareRunners[state.MaxCustomColumns-1] = async.NewRunner[map[string]domain.GitChangeStatus](vc.Window, 1)
 	vc.State.ColumnCount--
 	vc.State.RebuildHelmInstallCmd()
+
+	// A removed column may have contributed custom-only keys to the unified
+	// entries; drop them now and shift remaining columns' editors by key so
+	// their in-flight text survives the realignment.
+	vc.rebuildEntries(-1)
 
 	// Clamp focused column to remain within active columns.
 	if vc.State.FocusedCol >= vc.State.ColumnCount {
@@ -885,19 +953,26 @@ func (vc *ValuesController) populateColumnOverrides(colIdx int) {
 		}
 	}
 
-	col.EnsureEditors(len(vc.State.DefaultValues.Entries))
+	col.EnsureEditors(len(vc.State.Entries))
 
 	rawValues := col.CustomValues.RawValues
 	nodeTree := col.CustomValues.NodeTree
 	indent := col.YAMLIndent()
 
-	populated := 0
+	// populateColumnOverrides is authoritative for this column: the loaded file
+	// is the source of truth, so slots whose keys are absent from the new file
+	// get cleared. Without this, loading a replacement file leaves behind text
+	// for keys that existed only in the previous file.
+	for i, entry := range vc.State.Entries {
+		ed := &col.OverrideEditors[i]
 
-	for i, entry := range vc.State.DefaultValues.Entries {
-		if val, ok := resolveCustomValueWithComments(customMap, commentMap, rawValues, nodeTree, entry.Key, indent); ok {
-			col.OverrideEditors[i].SetText(val)
+		val, ok := resolveCustomValueWithComments(customMap, commentMap, rawValues, nodeTree, entry.Key, indent)
+		if !ok {
+			val = ""
+		}
 
-			populated++
+		if ed.Text() != val {
+			ed.SetText(val)
 		}
 	}
 
@@ -1002,7 +1077,7 @@ func (vc *ValuesController) onRenderOverrides() {
 	vc.State.RenderLoading = true
 
 	// Collect override keys and values from all active columns.
-	entries := vc.State.DefaultValues.Entries
+	entries := vc.State.Entries
 	keys := make([]string, 0, len(entries))
 	values := make([]string, 0, len(entries))
 
@@ -1186,7 +1261,7 @@ func (vc *ValuesController) onCollapseChanged() {
 
 	entryKey := ""
 
-	entries := vc.State.DefaultValues.Entries
+	entries := vc.State.Entries
 	if vc.State.FocusedRow >= 0 && vc.State.FocusedRow < len(vc.State.FilteredIndices) {
 		if idx := vc.State.FilteredIndices[vc.State.FocusedRow]; idx < len(entries) {
 			entryKey = entries[idx].Key

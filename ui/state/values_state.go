@@ -2,6 +2,7 @@ package state
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -159,6 +160,14 @@ type ValuesPageState struct {
 	Version             string
 	Loading             bool
 
+	// Entries is the unified, UI-facing entry list: chart defaults merged with
+	// any keys found only in custom files loaded into active columns. All
+	// layout, filtering, collapse, save, and render code reads from here
+	// rather than DefaultValues.Entries so that custom-only keys remain
+	// visible in the table and are preserved on save. Sorted by flat key.
+	// Rebuilt by RebuildUnifiedEntries whenever a source changes.
+	Entries []service.FlatValueEntry
+
 	// Multi-column override state
 	Columns     [MaxCustomColumns]CustomColumnState
 	ColumnCount int // 1-3 active columns
@@ -235,6 +244,177 @@ type ValuesPageState struct {
 // (e.g. RecentChart.ChartKey) that need to address the same entry.
 func (s *ValuesPageState) ChartKey() string {
 	return domain.ChartKey(s.RepoName, s.ChartName, s.OciRef, s.ChartPath, s.Version)
+}
+
+// RebuildUnifiedEntries recomputes Entries as the union of DefaultValues.Entries
+// and any keys present only in active columns' CustomValues. Entries are sorted
+// by flat key. Returns the previous Entries slice (for caller-side editor
+// re-alignment) along with whether the list actually changed.
+//
+// Custom-only entries are copied with a blank Value so the default-side cell
+// renders empty; their Type, Depth, and Comment are preserved. A custom-only
+// map or list entry stays a section header (IsSection == true) because Type is
+// "map"/"list" and Value is "".
+func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry, changed bool) {
+	prev = s.Entries
+
+	if s.DefaultValues == nil {
+		if len(prev) == 0 {
+			return prev, false
+		}
+
+		s.Entries = nil
+
+		return prev, true
+	}
+
+	defaults := s.DefaultValues.Entries
+
+	// Fast path: no active column has loaded custom values, so entries == defaults.
+	// Avoids allocating defaultKeys and customOnly on every editor-parse result
+	// for the common case of editing within keys that already exist in defaults.
+	if !s.anyColumnHasCustomValues() {
+		if entriesEqual(prev, defaults) {
+			return prev, false
+		}
+
+		s.Entries = slices.Clone(defaults)
+
+		return prev, true
+	}
+
+	defaultKeys := make(map[string]struct{}, len(defaults))
+	for i := range defaults {
+		defaultKeys[defaults[i].Key] = struct{}{}
+	}
+
+	// Walk active columns in order; first occurrence of a custom-only key wins
+	// (Type/Comment come from that column). Stable across columns: subsequent
+	// columns don't overwrite an already-seen key.
+	customOnly := make(map[string]service.FlatValueEntry)
+
+	for c := range s.ColumnCount {
+		cv := s.Columns[c].CustomValues
+		if cv == nil {
+			continue
+		}
+
+		for _, e := range cv.Entries {
+			if _, isDefault := defaultKeys[e.Key]; isDefault {
+				continue
+			}
+
+			if _, seen := customOnly[e.Key]; seen {
+				continue
+			}
+
+			customOnly[e.Key] = service.FlatValueEntry{
+				Key:     e.Key,
+				Type:    e.Type,
+				Depth:   e.Depth,
+				Comment: e.Comment,
+			}
+		}
+	}
+
+	// Second fast path: custom files only override keys that already exist in
+	// defaults, so the unified list equals defaults. Skip the merge+sort.
+	if len(customOnly) == 0 {
+		if entriesEqual(prev, defaults) {
+			return prev, false
+		}
+
+		s.Entries = slices.Clone(defaults)
+
+		return prev, true
+	}
+
+	merged := make([]service.FlatValueEntry, 0, len(defaults)+len(customOnly))
+	merged = append(merged, defaults...)
+
+	for _, e := range customOnly {
+		merged = append(merged, e)
+	}
+
+	slices.SortFunc(merged, func(a, b service.FlatValueEntry) int {
+		return strings.Compare(a.Key, b.Key)
+	})
+
+	if entriesEqual(prev, merged) {
+		return prev, false
+	}
+
+	s.Entries = merged
+
+	return prev, true
+}
+
+// anyColumnHasCustomValues reports whether any active column has loaded
+// CustomValues. Used to short-circuit RebuildUnifiedEntries in the common case
+// where no custom file is loaded yet.
+func (s *ValuesPageState) anyColumnHasCustomValues() bool {
+	for c := range s.ColumnCount {
+		if s.Columns[c].CustomValues != nil {
+			return true
+		}
+	}
+
+	return false
+}
+
+// entriesEqual reports whether two unified entry slices describe the same
+// ordered list. Relies on FlatValueEntry being comparable (all string/int).
+func entriesEqual(a, b []service.FlatValueEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// RealignEditorTextByKey shifts editor text from its old index (addressed by
+// oldEntries[i].Key) to its new index (addressed by s.Entries[j].Key, matched
+// on key). Text for keys that dropped out of Entries is discarded; slots
+// corresponding to keys with no prior text are cleared. Call after
+// RebuildUnifiedEntries returns changed == true for every editor slice that
+// was index-aligned with the old entry list.
+//
+// Skips SetText when the desired text is already present so a user actively
+// typing in a cell doesn't get their caret snapped back to the start by a
+// background parse-rebuild.
+func (s *ValuesPageState) RealignEditorTextByKey(oldEntries []service.FlatValueEntry, editors []widget.Editor) {
+	if len(editors) == 0 {
+		return
+	}
+
+	snapshot := make(map[string]string, len(oldEntries))
+
+	for i := range oldEntries {
+		if i >= len(editors) {
+			break
+		}
+
+		if text := editors[i].Text(); text != "" {
+			snapshot[oldEntries[i].Key] = text
+		}
+	}
+
+	for i := range editors {
+		var desired string
+		if i < len(s.Entries) {
+			desired = snapshot[s.Entries[i].Key]
+		}
+
+		if editors[i].Text() != desired {
+			editors[i].SetText(desired)
+		}
+	}
 }
 
 // HasUnsavedChanges returns true if any active column has unsaved modifications.
