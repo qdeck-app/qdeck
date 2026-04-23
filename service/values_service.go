@@ -356,6 +356,89 @@ func (s *ValuesService) CompareWithBaseline(
 	return changes, nil
 }
 
+// ApplyCollapseFilter removes entries whose key has any collapsed ancestor,
+// i.e. the entry sits inside a user-collapsed section. The collapsed section
+// header itself is kept visible so the user can click its chevron to expand
+// again. Reuses `out` (truncated) to avoid per-frame allocation; `out` and
+// `indices` may safely alias — the write pointer never overtakes the read
+// pointer. When `collapsed` is empty the function short-circuits and returns
+// `indices` unchanged (no copy into `out`).
+func ApplyCollapseFilter(
+	entries []FlatValueEntry,
+	indices []int,
+	collapsed map[string]bool,
+	out []int,
+) []int {
+	if len(collapsed) == 0 {
+		return indices
+	}
+
+	out = out[:0]
+
+	for _, idx := range indices {
+		if idx >= len(entries) {
+			continue
+		}
+
+		key := entries[idx].Key
+
+		// The collapsed section header itself stays visible.
+		if collapsed[key] {
+			out = append(out, idx)
+
+			continue
+		}
+
+		hidden := false
+
+		for p := domain.FlatKey(key).Parent(); p != ""; p = p.Parent() {
+			if collapsed[string(p)] {
+				hidden = true
+
+				break
+			}
+		}
+
+		if !hidden {
+			out = append(out, idx)
+		}
+	}
+
+	return out
+}
+
+// UncollapseMatchAncestors mutates `collapsed` to remove any entry that is a
+// proper ancestor of a matched index, so search results inside collapsed
+// sections become visible. Returns true if the set was modified (caller should
+// persist the change).
+func UncollapseMatchAncestors(
+	entries []FlatValueEntry,
+	indices []int,
+	collapsed map[string]bool,
+) bool {
+	if len(collapsed) == 0 {
+		return false
+	}
+
+	modified := false
+
+	for _, idx := range indices {
+		if idx >= len(entries) {
+			continue
+		}
+
+		for p := domain.FlatKey(entries[idx].Key).Parent(); p != ""; p = p.Parent() {
+			if collapsed[string(p)] {
+				delete(collapsed, string(p))
+
+				modified = true
+			}
+		}
+	}
+
+	return modified
+}
+
 func toFlatDTO(vf *domain.ValuesFile) *FlatValues {
 	entries := make([]FlatValueEntry, len(vf.Entries))
 	for i, e := range vf.Entries {

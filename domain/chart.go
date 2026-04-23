@@ -60,10 +60,15 @@ func ChartKey(repoName, chartName, ociURL, localPath, version string) string {
 // sessions. An empty FocusedKey means "no saved focus"; the column alone
 // should not be restored in that case.
 //
+// CollapsedKeys holds flat keys of section rows (map/list headers) the user
+// has collapsed on the values page. Stored as a sorted slice so the JSON diff
+// is stable across saves.
+//
 // LastTouchedAt records the last SaveChartUIState time; SaveChartUIState
 // evicts the oldest entries when the state map exceeds its cap.
 type ChartUIState struct {
 	FocusedKey    string    `json:"focusedKey,omitempty"`
 	FocusedCol    int       `json:"focusedCol,omitempty"`
+	CollapsedKeys []string  `json:"collapsedKeys,omitempty"`
 	LastTouchedAt time.Time `json:"lastTouchedAt,omitempty"`
 }

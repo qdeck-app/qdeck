@@ -48,6 +48,8 @@ const (
 	overrideIndentGuideW   unit.Dp = 1
 	overrideIndentDotLen   unit.Dp = 2
 	overrideIndentDotGap   unit.Dp = 3
+	overrideChevronSlotW   unit.Dp = 14 // fixed slot reserved before every key label
+	overrideChevronSize    unit.Dp = 6  // edge length of the filled chevron triangle
 )
 
 // OverrideTable renders a unified table with default values on the left and
@@ -80,9 +82,19 @@ type OverrideTable struct {
 	// ShowComments controls whether comment lines above default value entries are displayed.
 	ShowComments bool
 
-	hovers     []gesture.Hover
-	cellClicks []gesture.Click
-	HoveredRow int
+	hovers         []gesture.Hover
+	cellClicks     []gesture.Click
+	collapseClicks []gesture.Click
+	HoveredRow     int
+
+	// CollapsedKeys is a read-only reference to the page's collapsed set,
+	// keyed by flat key. Used only to pick the chevron glyph; mutation happens
+	// via OnCollapseToggle. Nil is treated as "nothing collapsed".
+	CollapsedKeys map[string]bool
+
+	// OnCollapseToggle fires when the user clicks a section row's chevron.
+	// The callback owns mutating the collapsed set and persisting it.
+	OnCollapseToggle func(key string)
 
 	// FocusedRow (visible filtered index) and FocusedCol (0-based override column)
 	// identify the cell to paint with a focus highlight. Set by the page each frame.
@@ -123,6 +135,12 @@ func (t *OverrideTable) ensureHovers(count int) {
 func (t *OverrideTable) ensureCellClicks(count int) {
 	if count > len(t.cellClicks) {
 		t.cellClicks = append(t.cellClicks, make([]gesture.Click, count-len(t.cellClicks))...)
+	}
+}
+
+func (t *OverrideTable) ensureCollapseClicks(count int) {
+	if count > len(t.collapseClicks) {
+		t.collapseClicks = append(t.collapseClicks, make([]gesture.Click, count-len(t.collapseClicks))...)
 	}
 }
 
@@ -212,6 +230,7 @@ func (t *OverrideTable) Layout(
 	t.List.Axis = layout.Vertical
 	t.ensureHovers(len(filteredIndices))
 	t.ensureCellClicks(len(filteredIndices))
+	t.ensureCollapseClicks(len(filteredIndices))
 
 	t.HoveredRow = overrideNoHover
 
@@ -299,7 +318,7 @@ func (t *OverrideTable) layoutRow(
 
 				return layout.Inset{Left: overridePaddingH}.Layout(gtx,
 					func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Left: indent}.Layout(gtx,
+						return layout.Inset{Left: indent + overrideChevronSlotW}.Layout(gtx,
 							func(gtx layout.Context) layout.Dimensions {
 								lbl := material.Caption(t.Theme, entry.Comment)
 								lbl.Color = theme.ColorMuted
@@ -329,7 +348,14 @@ func (t *OverrideTable) layoutRow(
 											lbl := material.Body2(t.Theme, displayKey)
 											lbl.MaxLines = 1
 
-											return LayoutLabel(gtx, lbl)
+											return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+													return t.layoutChevronSlot(gtx, index, entry.Key, section)
+												}),
+												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+													return LayoutLabel(gtx, lbl)
+												}),
+											)
 										})
 									}),
 									layout.Flexed(overrideValueProportion, func(gtx layout.Context) layout.Dimensions {
@@ -392,6 +418,12 @@ func (t *OverrideTable) layoutRow(
 		paintRowBg(gtx, dims.Size.Y, theme.ColorGitAdded)
 	case gitStatus == domain.GitModified:
 		paintRowBg(gtx, dims.Size.Y, theme.ColorGitModified)
+	case section && index == t.FocusedRow:
+		// Sections have no editable cells, so the per-column focus rect below
+		// doesn't fire. Paint a row-wide focus tint — same color as editable
+		// cell focus — so keyboard focus on a section chevron is visible and
+		// distinguishable from a plain hover row.
+		paintRowBg(gtx, dims.Size.Y, theme.ColorFocus)
 	case hovered:
 		paintRowBg(gtx, dims.Size.Y, theme.ColorHover)
 	}
@@ -697,6 +729,50 @@ func (t *OverrideTable) drawRowDecorations(
 	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	sep.Pop()
+}
+
+// layoutChevronSlot renders the collapse/expand chevron for section rows and
+// reserves an equivalent-width empty slot for leaf rows so labels stay aligned.
+// On section rows, clicks inside the slot invoke OnCollapseToggle.
+func (t *OverrideTable) layoutChevronSlot(
+	gtx layout.Context,
+	index int,
+	key string,
+	section bool,
+) layout.Dimensions {
+	slotW := gtx.Dp(overrideChevronSlotW)
+	size := image.Pt(slotW, slotW)
+
+	if !section {
+		return layout.Dimensions{Size: size}
+	}
+
+	// Drain click events for this row's chevron. Only fire on Click (mouse up
+	// inside the region) so a drag-scroll initiated on the chevron doesn't
+	// accidentally toggle it. The gesture fires mid-frame after FilteredIndices
+	// has already been computed, so request a redraw — the next frame picks up
+	// the mutated collapsed set.
+	for {
+		ev, ok := t.collapseClicks[index].Update(gtx.Source)
+		if !ok {
+			break
+		}
+
+		if ev.Kind == gesture.KindClick && t.OnCollapseToggle != nil {
+			t.OnCollapseToggle(key)
+			gtx.Execute(op.InvalidateCmd{})
+		}
+	}
+
+	drawChevronTriangle(gtx, size, t.CollapsedKeys[key])
+
+	// Register a click+cursor region over the entire slot.
+	area := clip.Rect{Max: size}.Push(gtx.Ops)
+	t.collapseClicks[index].Add(gtx.Ops)
+	pointer.CursorPointer.Add(gtx.Ops)
+	area.Pop()
+
+	return layout.Dimensions{Size: size}
 }
 
 // hasAnyOverride returns true if any column has a non-empty editor for the given entry.
