@@ -224,7 +224,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		})
 	}
 
-	entryCount := len(p.State.DefaultValues.Entries)
+	entryCount := len(p.State.Entries)
 
 	// Ensure editors are allocated for all active columns.
 	p.State.EnsureDefaultEditors(entryCount)
@@ -280,7 +280,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 
 	// Recompute filtered indices.
 	p.State.FilteredIndices = p.Search.FilterEntriesWithMultiOverrides(
-		p.State.DefaultValues.Entries,
+		p.State.Entries,
 		p.columnEditorSlices[:p.State.ColumnCount],
 		p.State.FilteredIndices,
 	)
@@ -297,7 +297,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	// SearchCollapseActive is true, so nothing is lost on search clear.
 	if inSearch && len(p.State.CollapsedKeys) > 0 {
 		service.UncollapseMatchAncestors(
-			p.State.DefaultValues.Entries,
+			p.State.Entries,
 			p.State.FilteredIndices,
 			p.State.CollapsedKeys,
 		)
@@ -307,7 +307,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	// so matches inside (previously) collapsed sections stay visible.
 	if !inSearch && len(p.State.CollapsedKeys) > 0 {
 		p.State.FilteredIndices = service.ApplyCollapseFilter(
-			p.State.DefaultValues.Entries,
+			p.State.Entries,
 			p.State.FilteredIndices,
 			p.State.CollapsedKeys,
 			p.State.FilteredIndices,
@@ -318,7 +318,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	// longer visible (filtered out or removed from the chart), drop the
 	// pending key and fall through to the clamps below.
 	if p.State.PendingFocusKey != "" {
-		entries := p.State.DefaultValues.Entries
+		entries := p.State.Entries
 		for r, idx := range p.State.FilteredIndices {
 			if idx < len(entries) && entries[idx].Key == p.State.PendingFocusKey {
 				p.State.FocusedRow = r
@@ -345,7 +345,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	// initial highlight lands on an editable cell. Collapsed section headers
 	// are intentionally landable — users press Cmd+/ there to unfold.
 	if len(p.State.FilteredIndices) > 0 && p.State.FocusedRow >= 0 {
-		entries := p.State.DefaultValues.Entries
+		entries := p.State.Entries
 		filtered := p.State.FilteredIndices
 
 		if idx := filtered[p.State.FocusedRow]; idx < len(entries) &&
@@ -402,7 +402,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		if p.OnCellFocusChanged != nil {
 			var entryKey string
 
-			entries := p.State.DefaultValues.Entries
+			entries := p.State.Entries
 			if p.State.FocusedRow >= 0 && p.State.FocusedRow < len(p.State.FilteredIndices) {
 				if idx := p.State.FilteredIndices[p.State.FocusedRow]; idx < len(entries) {
 					entryKey = entries[idx].Key
@@ -452,7 +452,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 				}),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					return p.Table.Layout(gtx,
-						p.State.DefaultValues.Entries,
+						p.State.Entries,
 						p.State.FilteredIndices,
 					)
 				}),
@@ -1427,7 +1427,7 @@ func (p *ValuesPage) handleCollapseShortcut(gtx layout.Context) {
 		return
 	}
 
-	entries := p.State.DefaultValues.Entries
+	entries := p.State.Entries
 
 	entryIdx := p.State.FilteredIndices[row]
 	if entryIdx >= len(entries) {
@@ -1477,7 +1477,7 @@ func (p *ValuesPage) handleCollapseShortcut(gtx layout.Context) {
 // So we keep scanning past non-descendants and only stop once we've left the
 // byte range of keys starting with sectionKey entirely.
 func (p *ValuesPage) firstLeafInsideSection(sectionKey string) string {
-	entries := p.State.DefaultValues.Entries
+	entries := p.State.Entries
 
 	sectionIdx := -1
 
@@ -1545,7 +1545,7 @@ func (p *ValuesPage) isHiddenByCollapsedAncestor(key string) bool {
 // section's own descendants. Falls back to the last leaf before the section
 // when the section sits at the end of the list. Returns "" if no leaf exists.
 func (p *ValuesPage) nextLeafOutsideSection(sectionKey string) string {
-	entries := p.State.DefaultValues.Entries
+	entries := p.State.Entries
 
 	sectionIdx := -1
 
@@ -1607,7 +1607,7 @@ func (p *ValuesPage) moveCellFocusRow(gtx layout.Context, delta int) {
 		return
 	}
 
-	entries := p.State.DefaultValues.Entries
+	entries := p.State.Entries
 	filtered := p.State.FilteredIndices
 	row := p.State.FocusedRow
 	col := p.State.FocusedCol
@@ -1658,7 +1658,7 @@ func (p *ValuesPage) moveCellFocusCol(gtx layout.Context, delta int) {
 		return
 	}
 
-	entries := p.State.DefaultValues.Entries
+	entries := p.State.Entries
 	filtered := p.State.FilteredIndices
 	row := p.State.FocusedRow
 
