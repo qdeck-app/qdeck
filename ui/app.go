@@ -590,6 +590,21 @@ func (a *Application) handleKeyEvents(gtx layout.Context) {
 				a.repoState.ConfirmActive = false
 			case a.valuesState.RecentDropdownOpen:
 				a.valuesState.RecentDropdownOpen = false
+			case a.valuesState.UnlockDialogOpen:
+				a.valuesState.UnlockDialogOpen = false
+				a.valuesState.PendingUnlockCol = 0
+				a.valuesState.PendingUnlockKey = ""
+			case a.valuesState.DeleteAnchorDialogOpen:
+				a.valuesState.DeleteAnchorDialogOpen = false
+				a.valuesState.PendingDeleteAnchorCol = 0
+				a.valuesState.PendingDeleteAnchorName = ""
+			case a.valuesState.AnchorOp != state.AnchorOpNone:
+				a.valuesState.AnchorOp = state.AnchorOpNone
+				a.valuesState.AnchorOpCol = 0
+				a.valuesState.AnchorOpKey = ""
+				a.valuesState.AnchorOpName = ""
+			case a.valuesState.AnchorMenuOpen:
+				a.valuesState.AnchorMenuOpen = false
 			default:
 				a.navigateBack()
 			}

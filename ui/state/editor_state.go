@@ -5,22 +5,30 @@ import (
 	"strings"
 
 	"gioui.org/widget"
+	"gopkg.in/yaml.v3"
 
 	"github.com/qdeck-app/qdeck/service"
 )
 
-// OverridesToYAML builds nested YAML from non-empty override editors.
-// Only entries with non-empty editor text are included.
-// Section headers (map/list) are skipped.
-// indent controls the number of spaces per nesting level in the output.
-// Returns empty string with nil error when no overrides are present.
-func OverridesToYAML(entries []service.FlatValueEntry, editors []widget.Editor, indent int) (string, error) {
+// OverridesToYAML builds YAML text from non-empty override editors. When tree
+// is non-nil, it is used as a template: anchors, aliases, comments, and scalar
+// styles from the originally loaded file are preserved for subtrees the user
+// did not edit. When tree is nil (no file loaded yet), the result is rebuilt
+// from scratch via FlatEntriesToYAML.
+//
+// Only entries with non-empty editor text are included. Section headers
+// (map/list) are skipped. indent controls the number of spaces per nesting
+// level in the output. Returns empty string with nil error when no overrides
+// are present.
+func OverridesToYAML(
+	entries []service.FlatValueEntry, editors []widget.Editor, indent int, tree *yaml.Node,
+) (string, error) {
 	overrides := collectOverrides(entries, editors)
 	if len(overrides) == 0 {
 		return "", nil
 	}
 
-	yamlText, err := service.FlatEntriesToYAML(overrides, indent)
+	yamlText, err := service.PatchNodeTree(tree, overrides, indent)
 	if err != nil {
 		return "", fmt.Errorf("overrides to YAML: %w", err)
 	}

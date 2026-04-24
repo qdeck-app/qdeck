@@ -57,6 +57,11 @@ func (s *ValuesService) ReadDefaultValues(ctx context.Context, chartPath string)
 		if comments, parseErr := parseComments(rawData); parseErr == nil {
 			attachComments(parentVF, comments)
 		}
+
+		var doc yaml.Node
+		if parseErr := yaml.Unmarshal(rawData, &doc); parseErr == nil && len(doc.Content) > 0 {
+			parentVF.NodeTree = doc.Content[0]
+		}
 	}
 
 	// No dependencies — identical to previous behavior.
@@ -72,7 +77,7 @@ func (s *ValuesService) ReadDefaultValues(ctx context.Context, chartPath string)
 		return strings.Compare(string(a.Key), string(b.Key))
 	})
 
-	return &domain.ValuesFile{Source: "default", Entries: merged}, nil
+	return &domain.ValuesFile{Source: "default", Entries: merged, NodeTree: parentVF.NodeTree}, nil
 }
 
 func (s *ValuesService) LoadDefaultValues(ctx context.Context, chartPath string) (*FlatValues, error) {
@@ -451,7 +456,13 @@ func toFlatDTO(vf *domain.ValuesFile) *FlatValues {
 		}
 	}
 
-	return &FlatValues{Entries: entries, RawValues: vf.RawValues, Indent: vf.Indent, NodeTree: vf.NodeTree}
+	return &FlatValues{
+		Entries:   entries,
+		RawValues: vf.RawValues,
+		Indent:    vf.Indent,
+		NodeTree:  vf.NodeTree,
+		Anchors:   ExtractAnchors(vf.NodeTree),
+	}
 }
 
 // flattenValues converts a nested map[string]any to a sorted flat list.

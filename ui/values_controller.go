@@ -216,6 +216,11 @@ func (vc *ValuesController) Callbacks() page.ValuesPageCallbacks {
 		OnShowCommentsChanged:   vc.onShowCommentsChanged,
 		OnCellFocusChanged:      vc.onCellFocusChanged,
 		OnCollapseChanged:       vc.onCollapseChanged,
+		OnAnchorCreate:          vc.onAnchorCreate,
+		OnAnchorAlias:           vc.onAnchorAlias,
+		OnUnlockCell:            vc.onUnlockCell,
+		OnAnchorRename:          vc.onAnchorRename,
+		OnAnchorDelete:          vc.onAnchorDelete,
 	}
 }
 
@@ -394,8 +399,23 @@ func (vc *ValuesController) pollEditorParse() {
 				col.EditorParseError = ""
 
 				// Preserve detected YAML indent from the originally loaded file.
-				if col.CustomValues != nil && col.CustomValues.Indent > 0 {
-					res.Value.Indent = col.CustomValues.Indent
+				// Also preserve the parsed yaml.Node tree: it represents the
+				// on-disk structure (anchors, aliases, comments, styles) and
+				// stays authoritative across edits — ParseEditorContent does
+				// not reparse it, and PatchNodeTree works against a deep copy
+				// so successive saves start from the same original tree.
+				if col.CustomValues != nil {
+					if col.CustomValues.Indent > 0 {
+						res.Value.Indent = col.CustomValues.Indent
+					}
+
+					if col.CustomValues.NodeTree != nil {
+						res.Value.NodeTree = col.CustomValues.NodeTree
+					}
+
+					if col.CustomValues.Anchors != nil {
+						res.Value.Anchors = col.CustomValues.Anchors
+					}
 				}
 
 				col.CustomValues = res.Value
@@ -758,7 +778,12 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 
 	col := &vc.State.Columns[colIdx]
 
-	yamlText, err := state.OverridesToYAML(vc.State.Entries, col.OverrideEditors, col.YAMLIndent())
+	var tree *yaml.Node
+	if col.CustomValues != nil {
+		tree = col.CustomValues.NodeTree
+	}
+
+	yamlText, err := state.OverridesToYAML(vc.State.Entries, col.OverrideEditors, col.YAMLIndent(), tree)
 	if err != nil {
 		vc.NotifState.Show(err.Error(), state.NotificationError, time.Now())
 
@@ -1276,4 +1301,244 @@ func (vc *ValuesController) onCollapseChanged() {
 			CollapsedKeys: collapsedMapToSlice(vc.persistedCollapsedKeys()),
 		},
 	})
+}
+
+// onAnchorCreate declares a YAML anchor on the cell at flatKey in column
+// colIdx. Mutates the column's NodeTree directly so the next save preserves
+// the anchor. Refreshes the Anchors map so the badge updates, and marks the
+// column modified to enable the Save button.
+func (vc *ValuesController) onAnchorCreate(colIdx int, flatKey, anchorName string) {
+	if colIdx < 0 || colIdx >= state.MaxCustomColumns {
+		return
+	}
+
+	col := &vc.State.Columns[colIdx]
+	if col.CustomValues == nil || col.CustomValues.NodeTree == nil {
+		vc.NotifState.Show("Load or save a file before declaring an anchor.", state.NotificationError, time.Now())
+
+		return
+	}
+
+	// Ensure the cell exists physically in the tree — SetNodeAnchor needs a
+	// node to attach .Anchor to, and a cell that's only present as a default
+	// or as an unsaved editor override isn't in the tree yet. EnsurePath
+	// materializes it using the editor's current text so the user's visible
+	// value is what gets anchored.
+	val, typ := vc.cellValueAndType(colIdx, flatKey)
+	if err := service.EnsurePath(col.CustomValues.NodeTree, flatKey, val, typ); err != nil {
+		vc.NotifState.Show("Create anchor: "+err.Error(), state.NotificationError, time.Now())
+
+		return
+	}
+
+	if err := service.SetNodeAnchor(col.CustomValues.NodeTree, flatKey, anchorName); err != nil {
+		vc.NotifState.Show("Create anchor: "+err.Error(), state.NotificationError, time.Now())
+
+		return
+	}
+
+	col.CustomValues.Anchors = service.ExtractAnchors(col.CustomValues.NodeTree)
+	col.ValuesModified = true
+
+	if vc.Window != nil {
+		vc.Window.Invalidate()
+	}
+}
+
+// onAnchorAlias converts the cell at flatKey to an alias pointing at an
+// existing anchor. Mutates NodeTree in place. Resets the editor text to the
+// aliased target's effective value so PatchNodeTree's equality check keeps
+// the alias intact on the next save.
+func (vc *ValuesController) onAnchorAlias(colIdx int, flatKey, anchorName string) {
+	if colIdx < 0 || colIdx >= state.MaxCustomColumns {
+		return
+	}
+
+	col := &vc.State.Columns[colIdx]
+	if col.CustomValues == nil || col.CustomValues.NodeTree == nil {
+		vc.NotifState.Show("Load or save a file before aliasing.", state.NotificationError, time.Now())
+
+		return
+	}
+
+	// Same reasoning as onAnchorCreate — the cell must physically exist in
+	// the tree so SetNodeAlias can find its parent mapping slot to replace.
+	val, typ := vc.cellValueAndType(colIdx, flatKey)
+	if err := service.EnsurePath(col.CustomValues.NodeTree, flatKey, val, typ); err != nil {
+		vc.NotifState.Show("Alias: "+err.Error(), state.NotificationError, time.Now())
+
+		return
+	}
+
+	if err := service.SetNodeAlias(col.CustomValues.NodeTree, flatKey, anchorName); err != nil {
+		vc.NotifState.Show("Alias: "+err.Error(), state.NotificationError, time.Now())
+
+		return
+	}
+
+	col.CustomValues.Anchors = service.ExtractAnchors(col.CustomValues.NodeTree)
+	col.ValuesModified = true
+
+	vc.syncEditorToAliasedValue(col, flatKey)
+
+	if vc.Window != nil {
+		vc.Window.Invalidate()
+	}
+}
+
+// onUnlockCell removes whichever anchor or alias annotation lives on the
+// cell at flatKey so the user can edit it. Dispatched when the unlock
+// confirm dialog is accepted. Anchors are cleared via ClearNodeAnchor;
+// aliases are severed via ClearNodeAlias (deep-copy of the target into the
+// alias slot). Refreshes Anchors so the badge disappears next frame.
+func (vc *ValuesController) onUnlockCell(colIdx int, flatKey string) {
+	if colIdx < 0 || colIdx >= state.MaxCustomColumns {
+		return
+	}
+
+	col := &vc.State.Columns[colIdx]
+	if col.CustomValues == nil || col.CustomValues.NodeTree == nil {
+		return
+	}
+
+	info, ok := col.CustomValues.Anchors[flatKey]
+	if !ok || info.Role == service.AnchorRoleNone {
+		return
+	}
+
+	var err error
+
+	switch info.Role {
+	case service.AnchorRoleAnchor:
+		err = service.ClearNodeAnchor(col.CustomValues.NodeTree, flatKey)
+	case service.AnchorRoleAlias:
+		err = service.ClearNodeAlias(col.CustomValues.NodeTree, flatKey)
+	case service.AnchorRoleNone:
+	}
+
+	if err != nil {
+		vc.NotifState.Show("Unlock cell: "+err.Error(), state.NotificationError, time.Now())
+
+		return
+	}
+
+	col.CustomValues.Anchors = service.ExtractAnchors(col.CustomValues.NodeTree)
+	col.ValuesModified = true
+
+	if vc.Window != nil {
+		vc.Window.Invalidate()
+	}
+}
+
+// onAnchorRename renames an existing anchor on the column's NodeTree,
+// updating every alias that referenced it. Refreshes Anchors so both the
+// anchor badge and all alias badges re-render with the new name.
+func (vc *ValuesController) onAnchorRename(colIdx int, oldName, newName string) {
+	if colIdx < 0 || colIdx >= state.MaxCustomColumns {
+		return
+	}
+
+	col := &vc.State.Columns[colIdx]
+	if col.CustomValues == nil || col.CustomValues.NodeTree == nil {
+		return
+	}
+
+	if err := service.RenameAnchor(col.CustomValues.NodeTree, oldName, newName); err != nil {
+		vc.NotifState.Show("Rename anchor: "+err.Error(), state.NotificationError, time.Now())
+
+		return
+	}
+
+	col.CustomValues.Anchors = service.ExtractAnchors(col.CustomValues.NodeTree)
+	col.ValuesModified = true
+
+	if vc.Window != nil {
+		vc.Window.Invalidate()
+	}
+}
+
+// onAnchorDelete removes an anchor and severs every alias pointing at it.
+// Editor texts for those cells remain unchanged (PatchNodeTree's equality
+// check keeps them when they match the now-literal tree value).
+func (vc *ValuesController) onAnchorDelete(colIdx int, name string) {
+	if colIdx < 0 || colIdx >= state.MaxCustomColumns {
+		return
+	}
+
+	col := &vc.State.Columns[colIdx]
+	if col.CustomValues == nil || col.CustomValues.NodeTree == nil {
+		return
+	}
+
+	if err := service.DeleteAnchor(col.CustomValues.NodeTree, name); err != nil {
+		vc.NotifState.Show("Delete anchor: "+err.Error(), state.NotificationError, time.Now())
+
+		return
+	}
+
+	col.CustomValues.Anchors = service.ExtractAnchors(col.CustomValues.NodeTree)
+	col.ValuesModified = true
+
+	if vc.Window != nil {
+		vc.Window.Invalidate()
+	}
+}
+
+// cellValueAndType returns the user-visible value and YAML type for the cell
+// at flatKey in column colIdx. The editor's current text wins when non-empty
+// (user override), falling back to the unified entry's default value. Type
+// comes from the unified entry so numeric/bool cells stay typed in YAML
+// after being inserted via EnsurePath.
+func (vc *ValuesController) cellValueAndType(colIdx int, flatKey string) (string, string) {
+	if colIdx < 0 || colIdx >= state.MaxCustomColumns {
+		return "", ""
+	}
+
+	col := &vc.State.Columns[colIdx]
+
+	for i, entry := range vc.State.Entries {
+		if entry.Key != flatKey {
+			continue
+		}
+
+		if i < len(col.OverrideEditors) {
+			if text := col.OverrideEditors[i].Text(); text != "" {
+				return text, entry.Type
+			}
+		}
+
+		return entry.Value, entry.Type
+	}
+
+	return "", ""
+}
+
+// syncEditorToAliasedValue updates the editor text for flatKey in col to
+// reflect the scalar value the newly-created alias now resolves to. Without
+// this the editor would keep the pre-alias text and PatchNodeTree would
+// break the alias on save.
+func (vc *ValuesController) syncEditorToAliasedValue(col *state.CustomColumnState, flatKey string) {
+	if col.CustomValues == nil || col.CustomValues.NodeTree == nil {
+		return
+	}
+
+	for i, entry := range vc.State.Entries {
+		if entry.Key != flatKey {
+			continue
+		}
+
+		if i >= len(col.OverrideEditors) {
+			return
+		}
+
+		resolved, ok := service.EffectiveScalarAt(col.CustomValues.NodeTree, flatKey)
+		if !ok {
+			return
+		}
+
+		col.OverrideEditors[i].SetText(resolved)
+		col.MarkOverride(i, resolved != "")
+
+		return
+	}
 }
