@@ -18,6 +18,7 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	"gopkg.in/yaml.v3"
 
 	"github.com/qdeck-app/qdeck/domain"
 	"github.com/qdeck-app/qdeck/service"
@@ -50,6 +51,10 @@ const (
 	overrideIndentDotGap   unit.Dp = 3
 	overrideChevronSlotW   unit.Dp = 14 // fixed slot reserved before every key label
 	overrideChevronSize    unit.Dp = 6  // edge length of the filled chevron triangle
+	overrideBadgeGap       unit.Dp = 4  // left margin between the key label and anchor/alias badge
+	overrideBadgePaddingH  unit.Dp = 4  // horizontal padding inside an anchor badge chip
+	overrideBadgePaddingV  unit.Dp = 1  // vertical padding inside an anchor badge chip
+	overrideBadgeRadius    unit.Dp = 2  // corner radius of an anchor badge chip
 )
 
 // OverrideTable renders a unified table with default values on the left and
@@ -73,6 +78,11 @@ type OverrideTable struct {
 	// Set by the page before Layout each frame (pointer copies, no alloc).
 	ColumnStates [state.MaxCustomColumns]*state.CustomColumnState
 
+	// DefaultAnchors maps flat keys to the anchor/alias annotation from the
+	// chart's default values.yaml. Set by the page each frame; nil means the
+	// default file declared no anchors (the common case).
+	DefaultAnchors map[string]service.AnchorInfo
+
 	// ColumnCount is the number of active override columns (1-3).
 	ColumnCount int
 
@@ -82,10 +92,27 @@ type OverrideTable struct {
 	// ShowComments controls whether comment lines above default value entries are displayed.
 	ShowComments bool
 
-	hovers         []gesture.Hover
-	cellClicks     []gesture.Click
-	collapseClicks []gesture.Click
-	HoveredRow     int
+	hovers             []gesture.Hover
+	cellClicks         []gesture.Click
+	collapseClicks     []gesture.Click
+	defaultBadgeClicks []gesture.Click
+	columnBadgeClicks  [state.MaxCustomColumns][]gesture.Click
+	rightClickTargets  [state.MaxCustomColumns][]rightClickTarget
+
+	// lastRightClickPos is the pointer's position in table-local coordinates
+	// at the most recent secondary-button press, captured by a table-root
+	// event filter so right-click positions can be forwarded to the page in
+	// a coord system the page can translate. Updated by drainRightClicks;
+	// read when firing OnCellContextMenu.
+	lastRightClickPos image.Point
+
+	// tableRootTarget is the event.Tag used for a table-root pointer filter
+	// that captures every press inside the table, regardless of which cell
+	// it lands in. Distinct from per-cell rightClickTargets so both fire on
+	// the same event without pass-through interference.
+	tableRootTarget struct{ _ byte }
+
+	HoveredRow int
 
 	// CollapsedKeys is a read-only reference to the page's collapsed set,
 	// keyed by flat key. Used only to pick the chevron glyph; mutation happens
@@ -124,6 +151,30 @@ type OverrideTable struct {
 
 	// OnKeyCopied fires when a key path is copied to the clipboard via left-cell click.
 	OnKeyCopied func(key string)
+
+	// OnJumpToFlatKey fires when the user clicks an alias badge. The argument
+	// is the flat key of the anchor definition within the same file the alias
+	// came from. Typical handler scrolls to and focuses that row.
+	OnJumpToFlatKey func(gtx layout.Context, key string)
+
+	// OnAnchorBadgeClicked fires when the user clicks a green `&name` anchor
+	// badge. Typical handler opens a menu listing every alias that references
+	// this anchor, turning the anchor badge into the reverse of an alias jump.
+	OnAnchorBadgeClicked func(gtx layout.Context, col int, flatKey, anchorName string)
+
+	// OnCellContextMenu fires on right-click of an override editor cell,
+	// carrying the column index, the cell's flat key, and the pointer's
+	// position in cell-local coordinates (unused by the current page handler
+	// — the page reads the page-local cursor position tracked at its root).
+	OnCellContextMenu func(col int, flatKey string, localPos image.Point)
+
+	// OnAnchoredCellEdit fires when the user's keystrokes actually change the
+	// text of a cell that participates in a YAML anchor or alias. The widget
+	// reverts the change automatically (so the anchor/alias stays intact);
+	// the handler typically opens a confirm dialog that, if accepted, clears
+	// the anchor so subsequent typing goes through. Not firing this callback
+	// — or doing nothing in it — silently ignores edits on anchored cells.
+	OnAnchoredCellEdit func(col int, flatKey string)
 }
 
 func (t *OverrideTable) ensureHovers(count int) {
@@ -141,6 +192,34 @@ func (t *OverrideTable) ensureCellClicks(count int) {
 func (t *OverrideTable) ensureCollapseClicks(count int) {
 	if count > len(t.collapseClicks) {
 		t.collapseClicks = append(t.collapseClicks, make([]gesture.Click, count-len(t.collapseClicks))...)
+	}
+}
+
+func (t *OverrideTable) ensureBadgeClicks(count int) {
+	if count > len(t.defaultBadgeClicks) {
+		t.defaultBadgeClicks = append(t.defaultBadgeClicks, make([]gesture.Click, count-len(t.defaultBadgeClicks))...)
+	}
+
+	for c := range state.MaxCustomColumns {
+		if count > len(t.columnBadgeClicks[c]) {
+			t.columnBadgeClicks[c] = append(t.columnBadgeClicks[c], make([]gesture.Click, count-len(t.columnBadgeClicks[c]))...)
+		}
+	}
+}
+
+// rightClickTarget is a single-byte struct whose address uniquely identifies
+// one (col, row) editor cell for Gio's pointer event dispatch. Empty structs
+// would share an address across the slice and break dispatch; a 1-byte field
+// forces unique element addresses.
+type rightClickTarget struct {
+	_ byte
+}
+
+func (t *OverrideTable) ensureRightClickTargets(count int) {
+	for c := range state.MaxCustomColumns {
+		if count > len(t.rightClickTargets[c]) {
+			t.rightClickTargets[c] = append(t.rightClickTargets[c], make([]rightClickTarget, count-len(t.rightClickTargets[c]))...)
+		}
 	}
 }
 
@@ -231,10 +310,21 @@ func (t *OverrideTable) Layout(
 	t.ensureHovers(len(filteredIndices))
 	t.ensureCellClicks(len(filteredIndices))
 	t.ensureCollapseClicks(len(filteredIndices))
+	t.ensureBadgeClicks(len(filteredIndices))
+	t.ensureRightClickTargets(len(filteredIndices))
 
 	t.HoveredRow = overrideNoHover
 
 	t.handleDrag(gtx)
+	t.captureTableRootPointer(gtx)
+
+	// Wrap the table body in pointer.PassOp so every event.Op registered
+	// inside (editors, clickables, the badge clicks, per-cell right-click
+	// tags) is pass=true. Gio's hitTest stops walking back the hit tree at
+	// the first pass=false handler, and a pass=false editor would otherwise
+	// block the table-root target from ever receiving press events.
+	tablePass := pointer.PassOp{}.Push(gtx.Ops)
+	defer tablePass.Pop()
 
 	parent := t.stickyParent(entries, filteredIndices)
 
@@ -363,7 +453,19 @@ func (t *OverrideTable) layoutRow(
 											return layout.Dimensions{}
 										}
 
-										return layoutDefaultValue(gtx, t.Theme, &t.DefaultValueEditors[entryIdx])
+										badgeInfo := t.DefaultAnchors[entry.Key]
+
+										return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
+											layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+												return layoutDefaultValue(gtx, t.Theme, &t.DefaultValueEditors[entryIdx])
+											}),
+											layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+												return t.layoutAnchorBadge(
+													gtx, badgeInfo, t.DefaultAnchors,
+													&t.defaultBadgeClicks[index], -1, entry.Key,
+												)
+											}),
+										)
 									}),
 								)
 							})
@@ -381,7 +483,7 @@ func (t *OverrideTable) layoutRow(
 							return layout.Dimensions{Size: image.Pt(rightW, 0)}
 						}
 
-						return t.layoutRightColumns(gtx, entryIdx, g, entry.Type)
+						return t.layoutRightColumns(gtx, index, entryIdx, entry.Key, g, entry.Type)
 					}),
 				)
 			}),
@@ -462,7 +564,9 @@ func (t *OverrideTable) layoutRow(
 // layoutRightColumns renders the editor sub-columns in the right panel.
 func (t *OverrideTable) layoutRightColumns(
 	gtx layout.Context,
+	rowIndex int,
 	entryIdx int,
+	entryKey string,
 	g colGeometry,
 	entryType string,
 ) layout.Dimensions {
@@ -488,35 +592,32 @@ func (t *OverrideTable) layoutRightColumns(
 				return layout.Dimensions{Size: image.Pt(w, 0)}
 			}
 
+			badgeInfo := t.columnAnchorInfo(col, entryKey)
+			colAnchors := t.columnAnchors(col)
+
 			return layout.Inset{Left: overridePaddingH}.Layout(gtx,
 				func(gtx layout.Context) layout.Dimensions {
-					ed := material.Editor(t.Theme, &editors[entryIdx], hint)
-					ed.TextSize = viewerEditorTextSize
+					t.drainRightClicks(gtx, col, rowIndex, entryKey)
 
-					// Draw indent ruler ticks for multi-line cells.
-					edText := editors[entryIdx].Text()
+					dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return t.layoutEditorCell(gtx, col, entryIdx, hint)
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return t.layoutAnchorBadge(
+								gtx, badgeInfo, colAnchors,
+								&t.columnBadgeClicks[col][rowIndex], col, entryKey,
+							)
+						}),
+					)
 
-					if strings.Contains(edText, "\n") {
-						indent := service.DefaultYAMLIndent
-						if t.ColumnStates[col] != nil {
-							indent = t.ColumnStates[col].YAMLIndent()
-						}
+					pass := pointer.PassOp{}.Push(gtx.Ops)
+					area := clip.Rect{Max: dims.Size}.Push(gtx.Ops)
+					event.Op(gtx.Ops, &t.rightClickTargets[col][rowIndex])
+					area.Pop()
+					pass.Pop()
 
-						// Record editor ops so we can draw guides behind the text.
-						// The editor must be laid out first so Regions()/CaretPos()
-						// return valid positions; then guides paint underneath, and
-						// the recorded editor ops replay on top.
-						macro := op.Record(gtx.Ops)
-						dims := LayoutEditor(gtx, t.Theme.Shaper, ed)
-						editorCall := macro.Stop()
-
-						t.drawIndentGuides(gtx, edText, &editors[entryIdx], indent)
-						editorCall.Add(gtx.Ops)
-
-						return dims
-					}
-
-					return LayoutEditor(gtx, t.Theme.Shaper, ed)
+					return dims
 				})
 		})
 		n++
@@ -550,8 +651,10 @@ func (t *OverrideTable) processEditorChanges(
 			continue
 		}
 
+		entryKey := entries[entryIdx].Key
+		textBefore := editors[entryIdx].Text()
+		lenBefore := len(textBefore)
 		changed := false
-		lenBefore := len(editors[entryIdx].Text())
 
 		for {
 			ev, ok := editors[entryIdx].Update(gtx)
@@ -564,35 +667,181 @@ func (t *OverrideTable) processEditorChanges(
 			}
 		}
 
-		if changed {
-			// Quick pre-filter: only attempt auto-indent when exactly one
-			// byte was added (not paste or deletion). The actual newline
-			// check happens inside autoIndentAfterNewline.
-			if len(editors[entryIdx].Text()) == lenBefore+1 && autoIndentAfterNewline(&editors[entryIdx]) {
-				// Drain the ChangeEvent produced by the indent insertion.
-				for {
-					_, ok := editors[entryIdx].Update(gtx)
-					if !ok {
-						break
-					}
+		if !changed {
+			continue
+		}
+
+		// Alias cells block edits: their value is dictated by the anchor,
+		// so changing the text here would silently break the alias at save
+		// time. Revert and prompt the user to unlock first.
+		//
+		// Anchor-definition cells (role=Anchor) stay fully editable — the
+		// .Anchor tag lives on the node and survives value edits, so the
+		// user can tweak the anchored value without severing any aliases.
+		//
+		// If OnAnchoredCellEdit is nil the page has opted out of the unlock
+		// flow, so reverting would leave the user with no feedback and no
+		// way to edit. Fall through and let the keystroke land — the alias
+		// will be severed at save time, matching an anchor-unaware table.
+		if t.OnAnchoredCellEdit != nil && t.columnAnchorInfo(c, entryKey).Role == service.AnchorRoleAlias {
+			// A ChangeEvent whose resulting text already matches the alias's
+			// effective value isn't a real divergence — this happens right
+			// after "Alias to…" when the controller programmatically syncs
+			// the editor to the resolved anchor value (fires a ChangeEvent
+			// but commits no drift), and also if the user happens to type
+			// the same value the anchor resolves to. In both cases the save
+			// would be a no-op, so skip the unlock prompt.
+			if t.aliasTextMatchesEffective(c, entryKey, editors[entryIdx].Text()) {
+				continue
+			}
+
+			editors[entryIdx].SetText(textBefore)
+			t.drainEditorEvents(gtx, &editors[entryIdx])
+
+			t.OnAnchoredCellEdit(c, entryKey)
+
+			continue
+		}
+
+		// Quick pre-filter: only attempt auto-indent when exactly one
+		// byte was added (not paste or deletion). The actual newline
+		// check happens inside autoIndentAfterNewline.
+		if len(editors[entryIdx].Text()) == lenBefore+1 && autoIndentAfterNewline(&editors[entryIdx]) {
+			t.drainEditorEvents(gtx, &editors[entryIdx])
+		}
+
+		if t.ColumnStates[c] != nil {
+			t.ColumnStates[c].MarkOverride(entryIdx, state.StripYAMLComments(editors[entryIdx].Text()) != "")
+		}
+
+		t.propagateAnchoredValueEdit(gtx, c, entryKey, entries, editors)
+
+		if t.OnChanged != nil {
+			indent := service.DefaultYAMLIndent
+
+			var tree *yaml.Node
+
+			if cs := t.ColumnStates[c]; cs != nil {
+				indent = cs.YAMLIndent()
+				if cs.CustomValues != nil {
+					tree = cs.CustomValues.NodeTree
 				}
 			}
 
-			if t.ColumnStates[c] != nil {
-				t.ColumnStates[c].MarkOverride(entryIdx, state.StripYAMLComments(editors[entryIdx].Text()) != "")
-			}
+			yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree)
+			t.OnChanged(c, yamlText, yamlErr)
+		}
+	}
+}
 
-			if t.OnChanged != nil {
-				indent := service.DefaultYAMLIndent
-				if t.ColumnStates[c] != nil {
-					indent = t.ColumnStates[c].YAMLIndent()
-				}
+// drainEditorEvents consumes pending editor events so a programmatic SetText
+// doesn't leak a ChangeEvent back to the next frame's loop.
+func (t *OverrideTable) drainEditorEvents(gtx layout.Context, ed *widget.Editor) {
+	for {
+		_, ok := ed.Update(gtx)
+		if !ok {
+			return
+		}
+	}
+}
 
-				yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent)
-				t.OnChanged(c, yamlText, yamlErr)
+// propagateAnchoredValueEdit mirrors a cell edit into every alias that
+// resolves through the same anchor. YAML semantics say aliases take their
+// value from the anchor, so editing the anchor's scalar (or a leaf under an
+// anchored mapping) must visually update the parallel alias cells — without
+// this the UI drifts from what the saved file will contain.
+//
+// The nearest anchored ancestor (or the edited cell itself) determines the
+// alias name; the suffix after that ancestor's flat key is appended to each
+// alias's flat key to locate the corresponding editor.
+func (t *OverrideTable) propagateAnchoredValueEdit(
+	gtx layout.Context,
+	col int,
+	changedKey string,
+	entries []service.FlatValueEntry,
+	editors []widget.Editor,
+) {
+	cs := t.ColumnStates[col]
+	if cs == nil || cs.CustomValues == nil || len(cs.CustomValues.Anchors) == 0 {
+		return
+	}
+
+	anchors := cs.CustomValues.Anchors
+
+	anchorKey, anchorName := findAnchoredAncestor(anchors, changedKey)
+	if anchorName == "" {
+		return
+	}
+
+	rawSuffix := strings.TrimPrefix(strings.TrimPrefix(changedKey, anchorKey), ".")
+
+	// Cache the dot-prefixed suffix once — each alias target is aliasKey+suffix
+	// with no branch or extra concat inside the loop.
+	var suffix string
+	if rawSuffix != "" {
+		suffix = "." + rawSuffix
+	}
+
+	changedIdx := indexOfEntry(entries, changedKey)
+	if changedIdx < 0 || changedIdx >= len(editors) {
+		return
+	}
+
+	newText := editors[changedIdx].Text()
+
+	for aliasKey, info := range anchors {
+		if info.Role != service.AnchorRoleAlias || info.Name != anchorName {
+			continue
+		}
+
+		targetKey := aliasKey + suffix
+
+		idx := indexOfEntry(entries, targetKey)
+		if idx < 0 || idx >= len(editors) {
+			continue
+		}
+
+		if editors[idx].Text() == newText {
+			continue
+		}
+
+		editors[idx].SetText(newText)
+		t.drainEditorEvents(gtx, &editors[idx])
+		cs.MarkOverride(idx, state.StripYAMLComments(newText) != "")
+	}
+}
+
+// findAnchoredAncestor returns the flat key of the nearest ancestor (or the
+// key itself) annotated with role=Anchor in anchors, along with the anchor
+// name. Returns ("", "") when no anchored ancestor is found.
+func findAnchoredAncestor(anchors map[string]service.AnchorInfo, key string) (string, string) {
+	bestKey := ""
+	bestName := ""
+
+	for k, info := range anchors {
+		if info.Role != service.AnchorRoleAnchor {
+			continue
+		}
+
+		if k == key || strings.HasPrefix(key, k+".") {
+			if len(k) > len(bestKey) {
+				bestKey = k
+				bestName = info.Name
 			}
 		}
 	}
+
+	return bestKey, bestName
+}
+
+func indexOfEntry(entries []service.FlatValueEntry, key string) int {
+	for i, e := range entries {
+		if e.Key == key {
+			return i
+		}
+	}
+
+	return -1
 }
 
 // handleCellClick focuses the correct column editor when a right-cell click occurs,
@@ -782,6 +1031,283 @@ func (t *OverrideTable) layoutChevronSlot(
 	area.Pop()
 
 	return layout.Dimensions{Size: size}
+}
+
+// drainRightClicks consumes secondary-button press events for a specific
+// (col, rowIndex) cell target. When the press is a right-click, fires
+// OnCellContextMenu with the table-local position captured separately by
+// captureTableRootPointer — cell-local Position would require a transform
+// the widget doesn't track, so we use the table-root-tagged event instead.
+func (t *OverrideTable) drainRightClicks(gtx layout.Context, col, rowIndex int, entryKey string) {
+	if t.OnCellContextMenu == nil {
+		return
+	}
+
+	target := &t.rightClickTargets[col][rowIndex]
+
+	for {
+		ev, ok := gtx.Event(pointer.Filter{
+			Target: target,
+			Kinds:  pointer.Press,
+		})
+		if !ok {
+			break
+		}
+
+		pe, isPtr := ev.(pointer.Event)
+		if !isPtr || pe.Kind != pointer.Press {
+			continue
+		}
+
+		if pe.Buttons.Contain(pointer.ButtonSecondary) {
+			t.OnCellContextMenu(col, entryKey, t.lastRightClickPos)
+		}
+	}
+}
+
+// captureTableRootPointer registers a clip covering the whole table with a
+// dedicated event.Tag wrapped in pointer.PassOp so it does not block — and
+// is not blocked by — per-cell event.Op registrations inside the list. Press
+// events delivered to this tag arrive in table-local coords, which the page
+// can translate to page-local by adding the table's page-Y offset.
+//
+// Cell-local coords (what pe.Position would give inside drainRightClicks)
+// would require composing every ancestor offset, a transform the widget
+// does not track.
+func (t *OverrideTable) captureTableRootPointer(gtx layout.Context) {
+	pass := pointer.PassOp{}.Push(gtx.Ops)
+	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	event.Op(gtx.Ops, &t.tableRootTarget)
+	area.Pop()
+	pass.Pop()
+
+	for {
+		ev, ok := gtx.Event(pointer.Filter{
+			Target: &t.tableRootTarget,
+			Kinds:  pointer.Press,
+		})
+		if !ok {
+			break
+		}
+
+		if pe, isPtr := ev.(pointer.Event); isPtr && pe.Kind == pointer.Press {
+			t.lastRightClickPos = pe.Position.Round()
+		}
+	}
+}
+
+// columnAnchorInfo returns anchor/alias metadata for a flat key in a specific
+// override column, or the zero value when that column did not load an anchored
+// file or the key has no anchor annotation.
+func (t *OverrideTable) columnAnchorInfo(col int, key string) service.AnchorInfo {
+	cs := t.ColumnStates[col]
+	if cs == nil || cs.CustomValues == nil {
+		return service.AnchorInfo{}
+	}
+
+	return cs.CustomValues.Anchors[key]
+}
+
+// aliasTextMatchesEffective reports whether text equals the scalar the alias
+// at key in col currently resolves to. Used by the alias-edit guard to
+// distinguish a programmatic sync (text already matches) from a real user
+// divergence that should prompt for unlock.
+func (t *OverrideTable) aliasTextMatchesEffective(col int, key, text string) bool {
+	cs := t.ColumnStates[col]
+	if cs == nil || cs.CustomValues == nil || cs.CustomValues.NodeTree == nil {
+		return false
+	}
+
+	resolved, ok := service.EffectiveScalarAt(cs.CustomValues.NodeTree, key)
+
+	return ok && resolved == text
+}
+
+// columnAnchors returns the full anchor map for a column, or nil when the
+// column has no loaded file. Used to resolve an alias badge's jump target.
+func (t *OverrideTable) columnAnchors(col int) map[string]service.AnchorInfo {
+	cs := t.ColumnStates[col]
+	if cs == nil || cs.CustomValues == nil {
+		return nil
+	}
+
+	return cs.CustomValues.Anchors
+}
+
+// layoutEditorCell renders one override editor cell, drawing indent guides
+// underneath for multi-line values. Factored out of layoutRightColumns so the
+// cell body can be stacked with an anchor badge overlay without nesting.
+// The editor is always editable — anchored cells keep a visible caret and
+// allow selection; actual text mutations are caught in processEditorChanges
+// and reverted with a warning dialog.
+func (t *OverrideTable) layoutEditorCell(gtx layout.Context, col, entryIdx int, hint string) layout.Dimensions {
+	editors := t.ColumnEditors[col]
+	ed := material.Editor(t.Theme, &editors[entryIdx], hint)
+	ed.TextSize = viewerEditorTextSize
+
+	edText := editors[entryIdx].Text()
+	if !strings.Contains(edText, "\n") {
+		return LayoutEditor(gtx, t.Theme.Shaper, ed)
+	}
+
+	indent := service.DefaultYAMLIndent
+	if t.ColumnStates[col] != nil {
+		indent = t.ColumnStates[col].YAMLIndent()
+	}
+
+	// Record editor ops so guides paint underneath and the recorded editor ops
+	// replay on top. The editor must be laid out first so Regions()/CaretPos()
+	// return valid positions.
+	macro := op.Record(gtx.Ops)
+	dims := LayoutEditor(gtx, t.Theme.Shaper, ed)
+	editorCall := macro.Stop()
+
+	t.drawIndentGuides(gtx, edText, &editors[entryIdx], indent)
+	editorCall.Add(gtx.Ops)
+
+	return dims
+}
+
+// layoutAnchorBadge renders a small pill marking a YAML anchor definition
+// (`&name`, green) or alias usage (`*name`, blue). Returns zero-size
+// dimensions when info is empty so the surrounding Flex.Rigid collapses with
+// no visible gap.
+//
+// Both roles are clickable when their respective handler is wired:
+//   - Alias badges fire OnJumpToFlatKey with the anchor's source flat key so
+//     the user jumps to the anchor definition.
+//   - Anchor badges fire OnAnchorBadgeClicked with the column, flat key, and
+//     anchor name so the page can show the reverse menu (aliases → jump).
+//
+// The badge registers a click region and a pointer cursor only for the role
+// whose handler is available; non-clickable badges remain purely decorative.
+//
+// col and flatKey are only used for the anchor-badge handler; aliases derive
+// their jump target from the anchors map.
+func (t *OverrideTable) layoutAnchorBadge(
+	gtx layout.Context,
+	info service.AnchorInfo,
+	anchors map[string]service.AnchorInfo,
+	click *gesture.Click,
+	col int,
+	flatKey string,
+) layout.Dimensions {
+	if info.Role == service.AnchorRoleNone || info.Name == "" {
+		return layout.Dimensions{}
+	}
+
+	var (
+		sigil string
+		bg    = theme.ColorAccent
+	)
+
+	switch info.Role {
+	case service.AnchorRoleAnchor:
+		sigil = "&"
+		bg = theme.ColorStatsAdded
+	case service.AnchorRoleAlias:
+		sigil = "*"
+		bg = theme.ColorAccent
+	case service.AnchorRoleNone:
+		return layout.Dimensions{}
+	}
+
+	clickable := click != nil && t.badgeHandler(info.Role) != nil
+	if clickable {
+		for {
+			ev, ok := click.Update(gtx.Source)
+			if !ok {
+				break
+			}
+
+			if ev.Kind != gesture.KindClick {
+				continue
+			}
+
+			switch info.Role {
+			case service.AnchorRoleAlias:
+				if target, found := findAnchorSourceKey(anchors, info.Name); found {
+					t.OnJumpToFlatKey(gtx, target)
+				}
+			case service.AnchorRoleAnchor:
+				t.OnAnchorBadgeClicked(gtx, col, flatKey, info.Name)
+			case service.AnchorRoleNone:
+			}
+		}
+	}
+
+	lbl := material.Caption(t.Theme, sigil+info.Name)
+	lbl.Color = theme.ColorWhite
+	lbl.MaxLines = 1
+
+	gap := gtx.Dp(overrideBadgeGap)
+	radius := gtx.Dp(overrideBadgeRadius)
+	innerInset := layout.Inset{
+		Left:   overrideBadgePaddingH,
+		Right:  overrideBadgePaddingH,
+		Top:    overrideBadgePaddingV,
+		Bottom: overrideBadgePaddingV,
+	}
+
+	innerGtx := gtx
+	innerGtx.Constraints.Min = image.Point{}
+
+	macro := op.Record(gtx.Ops)
+	pillDims := innerInset.Layout(innerGtx, func(gtx layout.Context) layout.Dimensions {
+		return LayoutLabel(gtx, lbl)
+	})
+	pillCall := macro.Stop()
+
+	offset := op.Offset(image.Pt(gap, 0)).Push(gtx.Ops)
+	shape := clip.UniformRRect(image.Rectangle{Max: pillDims.Size}, radius).Push(gtx.Ops)
+	paint.ColorOp{Color: bg}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	shape.Pop()
+	pillCall.Add(gtx.Ops)
+
+	if clickable {
+		area := clip.Rect{Max: pillDims.Size}.Push(gtx.Ops)
+		click.Add(gtx.Ops)
+		pointer.CursorPointer.Add(gtx.Ops)
+		area.Pop()
+	}
+
+	offset.Pop()
+
+	return layout.Dimensions{Size: image.Point{X: gap + pillDims.Size.X, Y: pillDims.Size.Y}}
+}
+
+// badgeHandler reports whether a handler is wired for a badge role — used to
+// decide whether to register a click region and a pointer cursor. Returns a
+// non-nil func when the role has a callback; nil otherwise.
+func (t *OverrideTable) badgeHandler(role service.AnchorRole) any {
+	switch role {
+	case service.AnchorRoleAlias:
+		if t.OnJumpToFlatKey != nil {
+			return t.OnJumpToFlatKey
+		}
+	case service.AnchorRoleAnchor:
+		if t.OnAnchorBadgeClicked != nil {
+			return t.OnAnchorBadgeClicked
+		}
+	case service.AnchorRoleNone:
+	}
+
+	return nil
+}
+
+// findAnchorSourceKey scans anchors for an entry with role=Anchor and name=n
+// and returns the flat key where it is defined. Returns ("", false) when no
+// matching anchor is in the map — the alias either points at an anchor
+// defined outside the file (not representable here) or the map is nil.
+func findAnchorSourceKey(anchors map[string]service.AnchorInfo, n string) (string, bool) {
+	for k, info := range anchors {
+		if info.Role == service.AnchorRoleAnchor && info.Name == n {
+			return k, true
+		}
+	}
+
+	return "", false
 }
 
 // hasAnyOverride returns true if any column has a non-empty editor for the given entry.

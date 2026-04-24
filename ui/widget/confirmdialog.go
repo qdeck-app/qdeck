@@ -53,6 +53,21 @@ func (d *ConfirmDialog) Update(gtx layout.Context) ConfirmAction {
 	return ConfirmNone
 }
 
+// dialogBackground paints a rounded filled rect sized to the Stack's current
+// Min constraint, used as the Expanded child of both ConfirmDialog and
+// AnchorDialog. Factored out so the two modal chromes don't duplicate the
+// same ~10 lines of paint setup.
+func dialogBackground(radius unit.Dp) func(gtx layout.Context) layout.Dimensions {
+	return func(gtx layout.Context) layout.Dimensions {
+		rect := clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(radius)).Push(gtx.Ops)
+		paint.ColorOp{Color: theme.ColorDropdownBg}.Add(gtx.Ops)
+		paint.PaintOp{}.Add(gtx.Ops)
+		rect.Pop()
+
+		return layout.Dimensions{Size: gtx.Constraints.Min}
+	}
+}
+
 func (d *ConfirmDialog) Layout(gtx layout.Context, th *material.Theme, message string) layout.Dimensions {
 	// Semi-transparent overlay that blocks pointer events to content underneath.
 	overlay := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
@@ -76,16 +91,8 @@ func (d *ConfirmDialog) Layout(gtx layout.Context, th *material.Theme, message s
 		gtx.Constraints.Max.X = gtx.Dp(dialogMaxWidth)
 		gtx.Constraints.Min.X = gtx.Dp(dialogMinWidth)
 
-		// Dialog background
 		return layout.Stack{}.Layout(gtx,
-			layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-				rect := clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(dialogCornerRadius)).Push(gtx.Ops)
-				paint.ColorOp{Color: theme.ColorDropdownBg}.Add(gtx.Ops)
-				paint.PaintOp{}.Add(gtx.Ops)
-				rect.Pop()
-
-				return layout.Dimensions{Size: gtx.Constraints.Min}
-			}),
+			layout.Expanded(dialogBackground(dialogCornerRadius)),
 			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 				return layout.UniformInset(dialogPadding).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,

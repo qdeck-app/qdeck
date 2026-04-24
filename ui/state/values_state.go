@@ -1,6 +1,7 @@
 package state
 
 import (
+	"image"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,6 +11,19 @@ import (
 
 	"github.com/qdeck-app/qdeck/domain"
 	"github.com/qdeck-app/qdeck/service"
+)
+
+// AnchorOpMode selects the anchor dialog body. Zero means no dialog is open.
+// Declared here (not in ui/widget) so state types don't need to import the
+// widget package, avoiding a cycle with notificationbar.
+type AnchorOpMode uint8
+
+const (
+	AnchorOpNone AnchorOpMode = iota
+	AnchorOpCreate
+	AnchorOpAlias
+	AnchorOpAliasesOf
+	AnchorOpRename
 )
 
 // YAMLIndent returns the detected indentation for this column's loaded file,
@@ -236,6 +250,37 @@ type ValuesPageState struct {
 	// Helm install command (cached, rebuilt on chart/file changes)
 	HelmInstallCmd    string
 	CopyInstallButton widget.Clickable
+
+	// Anchor operation state.
+	//
+	// AnchorOp is non-zero while a modal dialog prompts for an anchor name
+	// (Create) or anchor selection (Alias). AnchorOpCol and AnchorOpKey
+	// identify the target cell. AnchorMenuOpen tracks an active right-click
+	// context menu; the menu and the dialog are mutually exclusive — opening
+	// one dismisses the other. The actual widget instances (dialog, menu)
+	// live on ValuesPage to avoid a state -> ui/widget import cycle.
+	AnchorOp       AnchorOpMode
+	AnchorOpCol    int
+	AnchorOpKey    string
+	AnchorOpName   string // anchor name for AliasesOf mode, otherwise unused
+	AnchorMenuOpen bool
+	AnchorMenuPos  image.Point
+	AnchorMenuCol  int
+	AnchorMenuKey  string
+
+	// Unlock confirmation: set when the user types into a locked (anchored)
+	// cell. PendingUnlockCol/Key identify the cell awaiting a confirm
+	// decision. UnlockDialogOpen drives the ConfirmDialog overlay.
+	UnlockDialogOpen bool
+	PendingUnlockCol int
+	PendingUnlockKey string
+
+	// Delete-anchor confirmation: opened from the "Aliases of &name" dialog's
+	// Delete button. Stores the target column + anchor name for the handler
+	// to consume on confirm. Mirrors the UnlockDialogOpen pattern.
+	DeleteAnchorDialogOpen  bool
+	PendingDeleteAnchorCol  int
+	PendingDeleteAnchorName string
 }
 
 // ChartKey returns a stable identifier for the currently loaded chart, used as
