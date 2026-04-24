@@ -107,16 +107,13 @@ func layoutCardFocusable(gtx layout.Context, click *widget.Clickable, focused bo
 		bounds := image.Rectangle{Max: dims.Size}
 		radius := gtx.Dp(cardCornerRadius)
 
-		// Drop shadow behind card.
 		paintCardShadow(gtx, bounds, radius)
 
-		// Card background.
 		bgRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
 		paint.ColorOp{Color: theme.ColorCardBg}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		bgRect.Pop()
 
-		// Hover or focus overlay.
 		switch {
 		case focused:
 			focusRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
@@ -124,7 +121,6 @@ func layoutCardFocusable(gtx layout.Context, click *widget.Clickable, focused bo
 			paint.PaintOp{}.Add(gtx.Ops)
 			focusRect.Pop()
 
-			// Focus border.
 			bw := gtx.Dp(focusBorderWidth)
 			paintFocusBorder(gtx, bounds, bw)
 		case hovered:
@@ -155,7 +151,6 @@ func paintCardShadow(gtx layout.Context, bounds image.Rectangle, radius int) {
 	offsetY := gtx.Dp(cardShadowOffsetY)
 	spread := gtx.Dp(cardShadowSpread)
 
-	// Outer shadow: expanded and shifted down.
 	outer := bounds
 	outer.Min.X -= spread
 	outer.Min.Y += offsetY - spread
@@ -167,7 +162,6 @@ func paintCardShadow(gtx layout.Context, bounds image.Rectangle, radius int) {
 	paint.PaintOp{}.Add(gtx.Ops)
 	outerClip.Pop()
 
-	// Inner shadow: same width, shifted down half.
 	inner := bounds
 	inner.Min.Y += offsetY / 2 //nolint:mnd // half of shadow offset
 	inner.Max.Y += offsetY / 2 //nolint:mnd // half of shadow offset

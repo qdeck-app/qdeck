@@ -192,8 +192,8 @@ func (m *AnchorContextMenu) Layout(gtx layout.Context, th *material.Theme, origi
 	height := 2*rowH + 2*pad //nolint:mnd // two rows + two paddings.
 
 	// Clamp origin so the menu stays on screen.
-	origin.X = clamp(origin.X, 0, gtx.Constraints.Max.X-panelMinW)
-	origin.Y = clamp(origin.Y, 0, gtx.Constraints.Max.Y-height)
+	origin.X = min(max(origin.X, 0), gtx.Constraints.Max.X-panelMinW)
+	origin.Y = min(max(origin.Y, 0), gtx.Constraints.Max.Y-height)
 
 	// Offset the panel using op.Offset directly. layout.Inset converts via
 	// DP round-trip which was introducing subtle misalignment; op.Offset
@@ -312,16 +312,4 @@ func (m *AnchorContextMenu) layoutItem(
 			}),
 		)
 	})
-}
-
-func clamp(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-
-	if v > hi {
-		return hi
-	}
-
-	return v
 }

@@ -11,6 +11,13 @@ import (
 	"github.com/qdeck-app/qdeck/domain"
 )
 
+const (
+	configDirName = "qdeck"
+	dataFileName  = "data.json"
+	configDirPerm = 0o750
+	dataFilePerm  = 0o600
+)
+
 // AppData is the top-level JSON structure persisted to disk.
 type AppData struct {
 	RecentCharts        []domain.RecentChart           `json:"recentCharts"`

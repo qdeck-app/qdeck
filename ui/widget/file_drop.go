@@ -75,7 +75,12 @@ func (z *FileDropZone) Layout(gtx layout.Context, th *material.Theme) layout.Dim
 		title = "Drop values file"
 	}
 
-	var buf [4]layout.FlexChild //nolint:mnd // max: title + spacer + button + extra
+	// Stack-allocated scratch buffer sized to the maximum child count the
+	// layout can produce: title (1) + pick button's spacer+button (2) + extra
+	// widget (1). Adding a new optional child requires bumping this constant.
+	const maxFlexChildren = 4
+
+	var buf [maxFlexChildren]layout.FlexChild
 
 	children := buf[:0]
 

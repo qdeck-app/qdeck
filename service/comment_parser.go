@@ -13,8 +13,6 @@ type commentStackItem struct {
 	node   *yaml.Node
 }
 
-// parseComments extracts YAML comments from raw bytes and returns
-// a map from flat dot-separated key to comment string.
 func parseComments(data []byte) (map[string]string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -38,80 +36,71 @@ func parseComments(data []byte) (map[string]string, error) {
 		item := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
-		switch item.node.Kind {
-		case yaml.MappingNode:
-			processMappingComments(item, &stack, comments)
-		case yaml.SequenceNode:
-			processSequenceComments(item, &stack, comments)
-		}
+		walkCommentChildren(item, &stack, comments)
 	}
 
 	return comments, nil
 }
 
-func processMappingComments(item commentStackItem, stack *[]commentStackItem, comments map[string]string) {
+// walkCommentChildren visits each child of item.node, records any comment
+// into the map keyed by the child's flat path, and pushes composite children
+// onto the stack. Mapping nodes pair (key, value); sequence nodes have a single
+// node per index — the two share the rest of the logic.
+func walkCommentChildren(item commentStackItem, stack *[]commentStackItem, comments map[string]string) {
 	content := item.node.Content
 
-	for i := 0; i < len(content)-1; i += 2 {
-		keyNode := content[i]
-		valNode := content[i+1]
+	switch item.node.Kind {
+	case yaml.MappingNode:
+		for i := 0; i < len(content)-1; i += 2 {
+			keyNode, valNode := content[i], content[i+1]
+			if keyNode == nil || valNode == nil || keyNode.Value == "" {
+				continue
+			}
 
-		if keyNode == nil || valNode == nil {
-			continue
+			// Line comments may sit on key or value; head comments on either.
+			comment := bestComment(
+				[]string{valNode.LineComment, keyNode.LineComment},
+				[]string{keyNode.HeadComment, valNode.HeadComment},
+			)
+			recordChild(buildKey(item.prefix, keyNode.Value), valNode, comment, stack, comments)
 		}
+	case yaml.SequenceNode:
+		for i, child := range content {
+			if child == nil {
+				continue
+			}
 
-		// Skip entries with empty keys to avoid malformed keys in the comment map.
-		if keyNode.Value == "" {
-			continue
-		}
-
-		fullKey := buildKey(item.prefix, keyNode.Value)
-
-		// Try line comments first (inline), then head comments (block above).
-		// Check both value and key nodes for line comments, then both for head comments.
-		comment := bestLineComment(valNode.LineComment, keyNode.LineComment)
-		if comment == "" {
-			comment = bestHeadComment(keyNode.HeadComment, valNode.HeadComment)
-		}
-
-		if comment != "" {
-			comments[fullKey] = comment
-		}
-
-		if valNode.Kind == yaml.MappingNode || valNode.Kind == yaml.SequenceNode {
-			*stack = append(*stack, commentStackItem{prefix: fullKey, node: valNode})
+			// Sequence items have no separate key node — comments come only
+			// from the child itself.
+			comment := bestComment([]string{child.LineComment}, []string{child.HeadComment})
+			recordChild(item.prefix+"["+strconv.Itoa(i)+"]", child, comment, stack, comments)
 		}
 	}
 }
 
-func processSequenceComments(item commentStackItem, stack *[]commentStackItem, comments map[string]string) {
-	for i, child := range item.node.Content {
-		if child == nil {
-			continue
-		}
+func recordChild(
+	key string, node *yaml.Node, comment string,
+	stack *[]commentStackItem, comments map[string]string,
+) {
+	if comment != "" {
+		comments[key] = comment
+	}
 
-		indexKey := item.prefix + "[" + strconv.Itoa(i) + "]"
-
-		// Sequence items use simplified comment priority (line then head comments from the child node).
-		// Unlike mappings which have separate key/value nodes, each sequence item is represented
-		// by a single yaml.Node with no separate key node to provide comments.
-		comment := bestLineComment(child.LineComment)
-		if comment == "" {
-			comment = bestHeadComment(child.HeadComment)
-		}
-
-		if comment != "" {
-			comments[indexKey] = comment
-		}
-
-		if child.Kind == yaml.MappingNode || child.Kind == yaml.SequenceNode {
-			*stack = append(*stack, commentStackItem{prefix: indexKey, node: child})
-		}
+	if node.Kind == yaml.MappingNode || node.Kind == yaml.SequenceNode {
+		*stack = append(*stack, commentStackItem{prefix: key, node: node})
 	}
 }
 
-// bestLineComment returns the first non-empty single-line comment from candidates, cleaned.
-// Used for line comments (inline comments on the same line as the value).
+// bestComment prefers a non-empty line comment, falling back to the first
+// non-empty head comment.
+func bestComment(lineCandidates, headCandidates []string) string {
+	if c := bestLineComment(lineCandidates...); c != "" {
+		return c
+	}
+
+	return bestHeadComment(headCandidates...)
+}
+
 func bestLineComment(candidates ...string) string {
 	for _, c := range candidates {
 		if c != "" {
@@ -122,8 +111,6 @@ func bestLineComment(candidates ...string) string {
 	return ""
 }
 
-// bestHeadComment returns the first non-empty multi-line head comment from candidates, cleaned.
-// Used for head comments (block comments above the key).
 func bestHeadComment(candidates ...string) string {
 	for _, c := range candidates {
 		if c != "" {
@@ -134,7 +121,6 @@ func bestHeadComment(candidates ...string) string {
 	return ""
 }
 
-// cleanSingleComment strips the leading "# " from a single-line comment.
 func cleanSingleComment(c string) string {
 	c = strings.TrimLeft(c, "#")
 

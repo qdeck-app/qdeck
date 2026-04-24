@@ -53,13 +53,6 @@ func (r RecentChart) IsValid() error {
 	return nil
 }
 
-// ChartKey returns the persistence key for this recent-chart entry. Mirrors
-// the package-level ChartKey so the key derived from a RecentChart matches
-// the one derived from live UI state for the same chart.
-func (r RecentChart) ChartKey() string {
-	return ChartKey(r.RepoName, r.ChartName, r.OciURL, r.LocalPath, r.Version)
-}
-
 // RecentValuesFile represents a recently opened custom values file.
 type RecentValuesFile struct {
 	Path     string    `json:"path"`

@@ -20,28 +20,37 @@ const (
 // OperationType categorizes async operations to determine appropriate timeout
 type OperationType uint8
 
-// TimeoutForOperation returns the timeout duration for the given operation type
+var operationTimeouts = map[OperationType]time.Duration{
+	RepoListOperation:         NetworkOperationTimeout,
+	RepoAddOperation:          NetworkOperationTimeout,
+	RepoUpdateOperation:       NetworkOperationTimeout,
+	RepoRemoveOperation:       NetworkOperationTimeout,
+	ChartListOperation:        NetworkOperationTimeout,
+	ChartPullOperation:        NetworkOperationTimeout,
+	ChartVersionListOperation: NetworkOperationTimeout,
+	TemplateRenderOperation:   NetworkOperationTimeout,
+	RecentChartsLoadOperation: NetworkOperationTimeout,
+	RecentValuesLoadOperation: NetworkOperationTimeout,
+
+	ChartLoadOperation:        FileIOTimeout,
+	ChartSaveOperation:        FileIOTimeout,
+	ValuesLoadOperation:       FileIOTimeout,
+	ValuesSaveOperation:       FileIOTimeout,
+	FileExportOperation:       FileIOTimeout,
+	FilePickerOperation:       FileIOTimeout,
+	GitCompareOperation:       FileIOTimeout,
+	ChartUIStateLoadOperation: FileIOTimeout,
+
+	ValuesParseOperation: InMemoryTimeout,
+	ValuesDiffOperation:  InMemoryTimeout,
+}
+
+// TimeoutForOperation returns the timeout duration for the given operation
+// type, falling back to the network timeout for any unmapped operation.
 func TimeoutForOperation(op OperationType) time.Duration {
-	switch op {
-	// Network operations
-	case RepoListOperation, RepoAddOperation, RepoUpdateOperation, RepoRemoveOperation,
-		ChartListOperation, ChartPullOperation, ChartVersionListOperation,
-		TemplateRenderOperation, RecentChartsLoadOperation, RecentValuesLoadOperation:
-		return NetworkOperationTimeout
-
-	// File I/O operations
-	case ChartLoadOperation, ChartSaveOperation,
-		ValuesLoadOperation, ValuesSaveOperation,
-		FileExportOperation, FilePickerOperation,
-		GitCompareOperation, ChartUIStateLoadOperation:
-		return FileIOTimeout
-
-	// In-memory operations
-	case ValuesParseOperation, ValuesDiffOperation:
-		return InMemoryTimeout
-
-	default:
-		// Fallback to network timeout for unknown operations
-		return NetworkOperationTimeout
+	if t, ok := operationTimeouts[op]; ok {
+		return t
 	}
+
+	return NetworkOperationTimeout
 }

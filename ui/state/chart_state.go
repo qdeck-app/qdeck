@@ -42,49 +42,52 @@ type ChartPageState struct {
 	FocusedIndex int
 }
 
-//nolint:dupl // same cache pattern as BuildVersionSearchCache but different data types
+//nolint:dupl // same shape as BuildVersionSearchCache but different source and cache fields
 func (s *ChartPageState) BuildChartSearchCache() {
-	n := len(s.Charts)
-	s.ChartSearchNames = buildLowerCache(s.ChartSearchNames, n, func(i int) string { return s.Charts[i].Name })
-	s.ChartSearchDescs = buildLowerCache(s.ChartSearchDescs, n, func(i int) string { return s.Charts[i].Description })
+	refreshLowerCaches(len(s.Charts),
+		lowerField(&s.ChartSearchNames, func(i int) string { return s.Charts[i].Name }),
+		lowerField(&s.ChartSearchDescs, func(i int) string { return s.Charts[i].Description }),
+	)
 }
 
-//nolint:dupl // same cache pattern as BuildChartSearchCache but different data types
+//nolint:dupl // same shape as BuildChartSearchCache but different source and cache fields
 func (s *ChartPageState) BuildVersionSearchCache() {
-	n := len(s.Versions)
-	s.VersionSearchVersions = buildLowerCache(s.VersionSearchVersions, n, func(i int) string { return s.Versions[i].Version })
-	s.VersionSearchAppVersions = buildLowerCache(s.VersionSearchAppVersions, n, func(i int) string { return s.Versions[i].AppVersion })
+	refreshLowerCaches(len(s.Versions),
+		lowerField(&s.VersionSearchVersions, func(i int) string { return s.Versions[i].Version }),
+		lowerField(&s.VersionSearchAppVersions, func(i int) string { return s.Versions[i].AppVersion }),
+	)
 }
 
-// buildLowerCache populates a reusable string slice with lowercased values extracted by fn.
-func buildLowerCache(buf []string, n int, fn func(int) string) []string {
-	if cap(buf) >= n {
-		buf = buf[:n]
-	} else {
-		buf = make([]string, n)
-	}
-
-	for i := range n {
-		buf[i] = strings.ToLower(fn(i))
-	}
-
-	return buf
+type lowerCache struct {
+	dst *[]string
+	fn  func(int) string
 }
 
-// EnsureChartClickables grows clickable slices.
+func lowerField(dst *[]string, fn func(int) string) lowerCache {
+	return lowerCache{dst: dst, fn: fn}
+}
+
+// refreshLowerCaches resizes each target to n entries (reusing capacity) and
+// writes the lowercased extractor output into it. Used to keep multiple
+// search-key caches for the same record count in sync.
+func refreshLowerCaches(n int, caches ...lowerCache) {
+	for _, c := range caches {
+		if cap(*c.dst) >= n {
+			*c.dst = (*c.dst)[:n]
+		} else {
+			*c.dst = make([]string, n)
+		}
+
+		for i := range n {
+			(*c.dst)[i] = strings.ToLower(c.fn(i))
+		}
+	}
+}
+
 func (s *ChartPageState) EnsureChartClickables(count int) {
-	for len(s.ChartClicks) < count {
-		s.ChartClicks = append(s.ChartClicks, widget.Clickable{})
-	}
+	growClickables(count, &s.ChartClicks)
 }
 
-// EnsureVersionClickables grows clickable slices.
 func (s *ChartPageState) EnsureVersionClickables(count int) {
-	for len(s.VersionClicks) < count {
-		s.VersionClicks = append(s.VersionClicks, widget.Clickable{})
-	}
-
-	for len(s.SaveClicks) < count {
-		s.SaveClicks = append(s.SaveClicks, widget.Clickable{})
-	}
+	growClickables(count, &s.VersionClicks, &s.SaveClicks)
 }

@@ -64,12 +64,10 @@ func (s *ValuesService) ReadDefaultValues(ctx context.Context, chartPath string)
 		}
 	}
 
-	// No dependencies — identical to previous behavior.
 	if len(ch.Dependencies()) == 0 {
 		return parentVF, nil
 	}
 
-	// Collect subchart defaults (recursively) and merge with parent values.
 	depEntries := collectDependencyValues(ch, "")
 	merged := mergeParentOverDeps(parentVF.Entries, depEntries)
 
@@ -86,7 +84,7 @@ func (s *ValuesService) LoadDefaultValues(ctx context.Context, chartPath string)
 		return nil, fmt.Errorf("load default values from %s: %w", chartPath, err)
 	}
 
-	return toFlatDTO(vf), nil
+	return newFlatValues(vf), nil
 }
 
 // ComputeDiff computes the difference between default and custom values.
@@ -252,7 +250,7 @@ func (s *ValuesService) LoadAndMergeCustomValues(ctx context.Context, paths []st
 		return nil, fmt.Errorf("merge custom values: %w", err)
 	}
 
-	return toFlatDTO(merged), nil
+	return newFlatValues(merged), nil
 }
 
 // ParseYAMLText parses raw YAML text into flattened values.
@@ -279,7 +277,7 @@ func (s *ValuesService) ParseEditorContent(ctx context.Context, yamlText string)
 		return nil, fmt.Errorf("parse editor content: %w", err)
 	}
 
-	return toFlatDTO(vf), nil
+	return newFlatValues(vf), nil
 }
 
 // BuildOverrideMap converts flat key-value pairs into a nested map suitable
@@ -444,7 +442,7 @@ func UncollapseMatchAncestors(
 	return modified
 }
 
-func toFlatDTO(vf *domain.ValuesFile) *FlatValues {
+func newFlatValues(vf *domain.ValuesFile) *FlatValues {
 	entries := make([]FlatValueEntry, len(vf.Entries))
 	for i, e := range vf.Entries {
 		entries[i] = FlatValueEntry{
@@ -610,51 +608,26 @@ func attachComments(vf *domain.ValuesFile, comments map[string]string) {
 	}
 }
 
-// resolveDepPrefixes maps each dependency chart name to its effective prefix
-// (alias if set, otherwise name) using the parent chart's metadata.
-func resolveDepPrefixes(deps []*chart.Dependency) map[string]string {
-	prefixes := make(map[string]string, len(deps))
-
-	for _, d := range deps {
-		if d.Alias != "" {
-			prefixes[d.Name] = d.Alias
-		} else {
-			prefixes[d.Name] = d.Name
-		}
-	}
-
-	return prefixes
-}
-
-// prefixEntries returns a new slice with each entry's Key prefixed.
-func prefixEntries(entries []domain.ValuesEntry, prefix string) []domain.ValuesEntry {
-	result := make([]domain.ValuesEntry, len(entries))
-
-	for i, e := range entries {
-		result[i] = domain.ValuesEntry{
-			Key:     domain.FlatKey(buildKey(prefix, string(e.Key))),
-			Value:   e.Value,
-			Type:    e.Type,
-			Comment: e.Comment,
-		}
-	}
-
-	return result
-}
-
 // collectDependencyValues recursively collects flattened values from all
 // chart dependencies, prefixing keys with the dependency name or alias.
 func collectDependencyValues(ch *chart.Chart, parentPrefix string) []domain.ValuesEntry {
 	deps := ch.Dependencies()
-	if len(deps) == 0 {
+	if len(deps) == 0 || ch.Metadata == nil {
 		return nil
 	}
 
-	if ch.Metadata == nil {
-		return nil
-	}
+	// Each dependency's effective prefix is its alias when declared, otherwise
+	// its name. Build the lookup once so nested charts resolve in O(1).
+	prefixMap := make(map[string]string, len(ch.Metadata.Dependencies))
 
-	prefixMap := resolveDepPrefixes(ch.Metadata.Dependencies)
+	for _, d := range ch.Metadata.Dependencies {
+		prefix := d.Alias
+		if prefix == "" {
+			prefix = d.Name
+		}
+
+		prefixMap[d.Name] = prefix
+	}
 
 	var all []domain.ValuesEntry
 
@@ -679,7 +652,15 @@ func collectDependencyValues(ch *chart.Chart, parentPrefix string) []domain.Valu
 			}
 		}
 
-		all = append(all, prefixEntries(subVF.Entries, fullPrefix)...)
+		for _, e := range subVF.Entries {
+			all = append(all, domain.ValuesEntry{
+				Key:     domain.FlatKey(buildKey(fullPrefix, string(e.Key))),
+				Value:   e.Value,
+				Type:    e.Type,
+				Comment: e.Comment,
+			})
+		}
+
 		all = append(all, collectDependencyValues(dep, fullPrefix)...)
 	}
 

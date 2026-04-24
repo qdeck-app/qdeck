@@ -22,6 +22,8 @@ QDeck renders them as navigable tables, not walls of YAML.
 
 ## Development
 
+QDeck is a Gio-based Go GUI for visually exploring Helm chart values, layered on top of the helm.sh/helm/v3 library.
+
 Project follows [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/#specification) naming.
 
 Prerequisites:
