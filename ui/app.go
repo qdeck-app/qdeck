@@ -25,9 +25,9 @@ import (
 	"github.com/qdeck-app/qdeck/domain"
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/async"
-	"github.com/qdeck-app/qdeck/ui/closeguard"
-	"github.com/qdeck-app/qdeck/ui/nativedrop"
 	"github.com/qdeck-app/qdeck/ui/page"
+	"github.com/qdeck-app/qdeck/ui/platform/closeguard"
+	"github.com/qdeck-app/qdeck/ui/platform/nativedrop"
 	"github.com/qdeck-app/qdeck/ui/state"
 	"github.com/qdeck-app/qdeck/ui/theme"
 	customwidget "github.com/qdeck-app/qdeck/ui/widget"
@@ -87,7 +87,7 @@ type Application struct {
 	valuesState state.ValuesPageState
 
 	// Values controller owns values/render/save concerns.
-	valuesCtrl *ValuesController
+	valuesCtrl *page.ValuesController
 
 	// preloadCancel cancels any in-flight chart preloading goroutine.
 	preloadCancel context.CancelFunc
@@ -148,7 +148,7 @@ func NewApplication(
 	a.recentChartsRunner = async.NewRunner[[]domain.RecentChart](w, 1)
 	a.recentValuesEntriesRunner = async.NewRunner[[]domain.RecentValuesEntry](w, 1)
 
-	a.valuesCtrl = newValuesController(
+	a.valuesCtrl = page.NewValuesController(
 		w, &a.navState, &a.valuesState, &a.chartState, &a.notificationState,
 		expl, valuesSvc, templateSvc, recentSvc, chartSvc,
 	)

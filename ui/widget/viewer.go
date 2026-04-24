@@ -29,6 +29,7 @@ import (
 	"gioui.org/widget/material"
 	"gioui.org/x/explorer"
 
+	"github.com/qdeck-app/qdeck/ui/platform"
 	"github.com/qdeck-app/qdeck/ui/theme"
 )
 
@@ -748,8 +749,8 @@ func (v *viewerWindow) layoutFilePanel(gtx layout.Context, th *material.Theme) l
 			return layout.Inset{
 				Top: viewerSearchPadV, Bottom: viewerSearchPadV,
 				Left: viewerFilePadH, Right: viewerFilePadH,
-			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				filterHint := "Filter files (" + ShortcutLabel("⌘O", "Ctrl+O") + ")"
+			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions { //nolint:dupl // same shape as the content search editor below but a shared helper would take more args than it saves lines
+				filterHint := "Filter files (" + platform.ShortcutLabel("⌘O", "Ctrl+O") + ")"
 				ed := material.Editor(th, &v.fileFilter, filterHint)
 				ed.TextSize = viewerEditorTextSize
 
@@ -901,9 +902,9 @@ func (v *viewerWindow) layoutSearchRow(gtx layout.Context, th *material.Theme) l
 		Top: viewerSearchPadV, Bottom: viewerSearchPadV,
 		Left: viewerSearchPadH, Right: viewerSearchPadH,
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		prevHint := ShortcutLabel("\u2318\u2191", "Ctrl+\u2191")
-		nextHint := ShortcutLabel("\u2318\u2193", "Ctrl+\u2193")
-		saveHint := ShortcutLabel("\u2318+S", "Ctrl+S")
+		prevHint := platform.ShortcutLabel("\u2318\u2191", "Ctrl+\u2191")
+		nextHint := platform.ShortcutLabel("\u2318\u2193", "Ctrl+\u2193")
+		saveHint := platform.ShortcutLabel("\u2318+S", "Ctrl+S")
 
 		actionBtn := func(click *widget.Clickable, label string) layout.FlexChild {
 			return layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -998,8 +999,8 @@ func (v *viewerWindow) layoutSearchInput(gtx layout.Context, th *material.Theme)
 		Top: viewerInputPadV, Bottom: viewerInputPadV,
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				searchHint := "Search (" + ShortcutLabel("⌘F", "Ctrl+F") + ")"
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { //nolint:dupl // mirrors the file-filter editor above; see note there
+				searchHint := "Search (" + platform.ShortcutLabel("⌘F", "Ctrl+F") + ")"
 				ed := material.Editor(th, &v.searchEditor, searchHint)
 				ed.TextSize = viewerEditorTextSize
 

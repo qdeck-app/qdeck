@@ -4,7 +4,7 @@ import (
 	"gioui.org/text"
 	"gioui.org/widget/material"
 
-	"github.com/qdeck-app/qdeck/ui/font"
+	"github.com/qdeck-app/qdeck/ui/platform/font"
 )
 
 func NewTheme() *material.Theme {

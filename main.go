@@ -10,7 +10,7 @@ import (
 	"gioui.org/unit"
 	"helm.sh/helm/v3/pkg/cli"
 
-	"github.com/qdeck-app/qdeck/infra/config"
+	"github.com/qdeck-app/qdeck/infrastructure/config"
 	"github.com/qdeck-app/qdeck/infrastructure/storage"
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui"
