@@ -36,29 +36,6 @@ func LayoutTextButton(gtx layout.Context, th *material.Theme, click *widget.Clic
 	return layoutActionButton(gtx, th, click, label, theme.ColorAccent, left)
 }
 
-// LayoutCompactTextButton renders a clickable text link with minimal vertical padding,
-// suitable for embedding in rows that already provide their own vertical spacing (e.g. breadcrumb).
-func LayoutCompactTextButton(gtx layout.Context, th *material.Theme, click *widget.Clickable, label string) layout.Dimensions {
-	hovered := click.Hovered()
-
-	lbl := material.Body2(th, label)
-	lbl.Color = theme.ColorAccent
-
-	m := op.Record(gtx.Ops)
-	dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Inset{Left: textBtnPaddingH, Right: textBtnPaddingH}.Layout(gtx, lbl.Layout)
-	})
-	c := m.Stop()
-
-	paintHoverBg(gtx, dims, hovered)
-
-	c.Add(gtx.Ops)
-
-	pushPointerCursor(gtx, dims, click)
-
-	return dims
-}
-
 func layoutActionButton(
 	gtx layout.Context, th *material.Theme, click *widget.Clickable,
 	label string, textColor color.NRGBA, left unit.Dp,
