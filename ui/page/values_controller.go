@@ -1,4 +1,4 @@
-package ui
+package page
 
 import (
 	"context"
@@ -25,8 +25,7 @@ import (
 	gitadapter "github.com/qdeck-app/qdeck/infrastructure/git"
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/async"
-	"github.com/qdeck-app/qdeck/ui/page"
-	"github.com/qdeck-app/qdeck/ui/revealer"
+	"github.com/qdeck-app/qdeck/ui/platform/revealer"
 	"github.com/qdeck-app/qdeck/ui/state"
 	customwidget "github.com/qdeck-app/qdeck/ui/widget"
 )
@@ -140,7 +139,7 @@ type chartUIStateResult struct {
 // enough that the last position hits disk before the user closes the app.
 const cellFocusSaveDelay = 300 * time.Millisecond
 
-func newValuesController(
+func NewValuesController(
 	w *app.Window,
 	navState *state.NavigationState,
 	valuesState *state.ValuesPageState,
@@ -196,8 +195,8 @@ func (vc *ValuesController) Shutdown() {
 	vc.focusSaver.Flush()
 }
 
-func (vc *ValuesController) Callbacks() page.ValuesPageCallbacks {
-	return page.ValuesPageCallbacks{
+func (vc *ValuesController) Callbacks() ValuesPageCallbacks {
+	return ValuesPageCallbacks{
 		OnColumnFilesSelected:   vc.OnColumnFilesSelected,
 		OnOpenColumnFile:        vc.onOpenColumnFile,
 		OnRevealFile:            vc.onRevealColumnFile,
@@ -1284,14 +1283,7 @@ func (vc *ValuesController) onCollapseChanged() {
 		return
 	}
 
-	entryKey := ""
-
-	entries := vc.State.Entries
-	if vc.State.FocusedRow >= 0 && vc.State.FocusedRow < len(vc.State.FilteredIndices) {
-		if idx := vc.State.FilteredIndices[vc.State.FocusedRow]; idx < len(entries) {
-			entryKey = entries[idx].Key
-		}
-	}
+	entryKey := vc.State.FocusedEntryKey()
 
 	vc.focusSaver.Schedule(chartFocusJob{
 		chartKey: chartKey,

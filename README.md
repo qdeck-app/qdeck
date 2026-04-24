@@ -53,6 +53,6 @@ Copyright © 2026 bosiakov
 
 Licensed under MIT (see [LICENSE](LICENSE)).
 
-The font `ui/font/FiraCode-Medium.ttf` is licensed under the OFL-1.1. See [ui/font/LICENSE](ui/font/LICENSE) for details.
+The font `ui/platform/font/FiraCode-Medium.ttf` is licensed under the OFL-1.1. See [ui/platform/font/LICENSE](ui/platform/font/LICENSE) for details.
 
 All fonts are legally licensed to Yauheni Basiakou via MyFonts.

@@ -25,6 +25,7 @@ import (
 
 	"github.com/qdeck-app/qdeck/domain"
 	"github.com/qdeck-app/qdeck/service"
+	"github.com/qdeck-app/qdeck/ui/platform"
 	"github.com/qdeck-app/qdeck/ui/state"
 	"github.com/qdeck-app/qdeck/ui/theme"
 	customwidget "github.com/qdeck-app/qdeck/ui/widget"
@@ -99,7 +100,7 @@ const (
 //
 //nolint:gochecknoglobals // platform-specific modifier resolved once at init
 var cellNavMod = func() key.Modifiers {
-	if customwidget.IsMac {
+	if platform.IsMac {
 		return key.ModCtrl | key.ModShift
 	}
 
@@ -110,7 +111,7 @@ var cellNavMod = func() key.Modifiers {
 // Mac gets modifier/tab symbols, Windows/Linux gets spelled-out names.
 //
 //nolint:gochecknoglobals // platform-specific hint resolved once at init
-var helpShortcutLine = customwidget.ShortcutLabel(
+var helpShortcutLine = platform.ShortcutLabel(
 	"Ctrl+Shift+Arrows nav \u00b7 Tab/Shift+Tab indent \u00b7 \u2318+/ fold \u00b7 Ctrl+Shift+M anchor menu \u00b7 ",
 	"Alt+Arrows nav \u00b7 Tab/Shift+Tab indent \u00b7 Ctrl+/ fold \u00b7 Alt+M anchor menu \u00b7 ",
 )
@@ -480,16 +481,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		p.lastFocusedCol = p.State.FocusedCol
 
 		if p.OnCellFocusChanged != nil {
-			var entryKey string
-
-			entries := p.State.Entries
-			if p.State.FocusedRow >= 0 && p.State.FocusedRow < len(p.State.FilteredIndices) {
-				if idx := p.State.FilteredIndices[p.State.FocusedRow]; idx < len(entries) {
-					entryKey = entries[idx].Key
-				}
-			}
-
-			p.OnCellFocusChanged(entryKey, p.State.FocusedCol)
+			p.OnCellFocusChanged(p.State.FocusedEntryKey(), p.State.FocusedCol)
 		}
 	}
 
@@ -517,7 +509,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 					return dims
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					searchHint := customwidget.ShortcutLabel("\u2318+F", "Ctrl+F")
+					searchHint := platform.ShortcutLabel("\u2318+F", "Ctrl+F")
 					dims := p.Search.Layout(gtx, p.Theme, "Search values... ("+searchHint+")")
 					totalRigidH += dims.Size.Y
 
@@ -1643,7 +1635,7 @@ func (p *ValuesPage) layoutColumnFileStatus(gtx layout.Context, colIdx int) layo
 	n++
 
 	if col.ValuesModified {
-		saveHint := customwidget.ShortcutLabel("\u2318+S", "Ctrl+S")
+		saveHint := platform.ShortcutLabel("\u2318+S", "Ctrl+S")
 
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return LayoutTextButton(gtx, p.Theme, &col.SaveValuesButton, "Save ("+saveHint+")", valuesPaddingSmall)
@@ -1851,8 +1843,8 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		Left: valuesSpacing, Right: valuesSpacing,
 		Bottom: valuesPaddingSmall,
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		defaultsHint := customwidget.ShortcutLabel("\u2318+1", "F3")
-		overridesHint := customwidget.ShortcutLabel("\u2318+2", "F4")
+		defaultsHint := platform.ShortcutLabel("\u2318+1", "F3")
+		overridesHint := platform.ShortcutLabel("\u2318+2", "F4")
 
 		// defaults + overrides + show-comments + loading + save + spacer + helm cmd + copy
 		const maxRenderChildren = 8

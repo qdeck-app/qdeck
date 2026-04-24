@@ -16,6 +16,18 @@ import (
 	"github.com/qdeck-app/qdeck/domain"
 )
 
+type AddRepoRequest struct {
+	Name     string
+	URL      string
+	Username string
+	Password string
+}
+
+type RenameRepoRequest struct {
+	OldName string
+	NewName string
+}
+
 var (
 	errRepoNameEmpty = errors.New("repository name must not be empty")
 	errRepoURLEmpty  = errors.New("repository URL must not be empty")

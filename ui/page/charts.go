@@ -10,6 +10,7 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 
+	"github.com/qdeck-app/qdeck/ui/platform"
 	"github.com/qdeck-app/qdeck/ui/state"
 	"github.com/qdeck-app/qdeck/ui/theme"
 	customwidget "github.com/qdeck-app/qdeck/ui/widget"
@@ -61,7 +62,7 @@ func (p *ChartsPage) layoutSearch(gtx layout.Context) layout.Dimensions {
 		gtx.Execute(key.FocusCmd{Tag: &p.State.SearchEditor})
 	}
 
-	searchHint := customwidget.ShortcutLabel("\u2318+F", "Ctrl+F")
+	searchHint := platform.ShortcutLabel("\u2318+F", "Ctrl+F")
 
 	hint := "Search charts... (" + searchHint + ")"
 	if p.State.SelectedChart != "" {

@@ -1,11 +1,8 @@
 package service
 
 import (
-	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -23,47 +20,6 @@ const (
 	maxKeyIndex       = 10000
 )
 
-// DetectYAMLIndent scans raw YAML bytes and returns the smallest indentation
-// found across all indented content lines. This avoids mis-detecting when the
-// first indented line is deeply nested (e.g. 8 spaces at indent-4, depth-2).
-// Tab-indented lines are ignored — only space indentation is considered.
-// Returns DefaultYAMLIndent when no indentation is found (e.g. flat files or
-// empty input). The result is clamped to [1, 8].
-func DetectYAMLIndent(data []byte) int {
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	minIndent := 0
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" || line == "---" || line == "..." {
-			continue
-		}
-
-		trimmed := strings.TrimLeft(line, " ")
-		if trimmed == "" || trimmed[0] == '#' {
-			continue
-		}
-
-		spaces := len(line) - len(trimmed)
-		if spaces > 0 && (minIndent == 0 || spaces < minIndent) {
-			minIndent = spaces
-		}
-	}
-
-	if minIndent == 0 {
-		return DefaultYAMLIndent
-	}
-
-	return min(max(minIndent, 1), maxYAMLIndent)
-}
-
-// OverrideEntry holds a single flat key-value pair for YAML reconstruction.
-type OverrideEntry struct {
-	Key   string
-	Value string
-	Type  string
-}
-
 // keySegment represents one segment of a parsed flat key.
 // If isIndex is true, index holds the array position; otherwise name holds the map key.
 type keySegment struct {
@@ -72,47 +28,13 @@ type keySegment struct {
 	isIndex bool
 }
 
-// FlatEntriesToYAML reconstructs nested YAML from flat dot-separated key-value pairs.
-// indent controls the number of spaces per nesting level in the output.
-// Returns empty string when entries is empty.
-func FlatEntriesToYAML(entries []OverrideEntry, indent int) (string, error) {
-	if len(entries) == 0 {
-		return "", nil
-	}
-
-	root := make(map[string]any)
-
-	for _, e := range entries {
-		segments, err := parseKeySegments(e.Key)
-		if err != nil {
-			return "", fmt.Errorf("parse key %q: %w", e.Key, err)
-		}
-
-		if len(segments) == 0 {
-			continue
-		}
-
-		val := convertValue(e.Value, e.Type)
-
-		if err := setNestedValue(root, segments, val); err != nil {
-			return "", fmt.Errorf("set key %q: %w", e.Key, err)
-		}
-	}
-
-	var buf bytes.Buffer
-
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(indent)
-
-	if err := enc.Encode(root); err != nil {
-		return "", fmt.Errorf("marshal overrides to YAML: %w", err)
-	}
-
-	if err := enc.Close(); err != nil {
-		return "", fmt.Errorf("close YAML encoder: %w", err)
-	}
-
-	return buf.String(), nil
+// parentRef tracks the container holding the current node so that
+// a reallocated slice can be written back without re-walking from root.
+type parentRef struct {
+	container any
+	key       string
+	index     int
+	isIndex   bool
 }
 
 // parseKeySegments splits a flat key like "service.ports[0].name" into typed segments.
@@ -174,13 +96,27 @@ func parseKeySegments(key string) ([]keySegment, error) {
 	return segments, nil
 }
 
-// parentRef tracks the container holding the current node so that
-// a reallocated slice can be written back without re-walking from root.
-type parentRef struct {
-	container any
-	key       string
-	index     int
-	isIndex   bool
+// parseArraySegment splits "key[0]" into ("key", 0, true) or "[0]" into ("", 0, true).
+// For plain keys like "host" it returns ("host", 0, false).
+func parseArraySegment(seg string) (string, int, bool) {
+	bracketIdx := strings.IndexByte(seg, '[')
+	if bracketIdx < 0 {
+		return seg, 0, false
+	}
+
+	closeIdx := strings.IndexByte(seg[bracketIdx:], ']')
+	if closeIdx < 0 {
+		return seg, 0, false
+	}
+
+	idxStr := seg[bracketIdx+1 : bracketIdx+closeIdx]
+
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil {
+		return seg, 0, false
+	}
+
+	return seg[:bracketIdx], idx, true
 }
 
 // setInParent writes val back into the parent container.
@@ -276,92 +212,6 @@ func setNestedValue(root map[string]any, segments []keySegment, value any) error
 	return nil
 }
 
-// LookupRawValue navigates a nested map using a flat key (e.g., "auth.fernetKey" or "apiVersions[0]")
-// and returns the value found at that path. Returns (nil, false, nil) when the key is empty or not found.
-func LookupRawValue(raw map[string]any, flatKey string) (any, bool, error) {
-	segments, err := parseKeySegments(flatKey)
-	if err != nil {
-		return nil, false, fmt.Errorf("lookup key %q: %w", flatKey, err)
-	}
-
-	if len(segments) == 0 {
-		return nil, false, nil
-	}
-
-	var current any = raw
-
-	for _, seg := range segments {
-		if seg.isIndex {
-			slice, ok := current.([]any)
-			if !ok || seg.index >= len(slice) {
-				return nil, false, nil
-			}
-
-			current = slice[seg.index]
-		} else {
-			m, ok := current.(map[string]any)
-			if !ok {
-				return nil, false, nil
-			}
-
-			v, exists := m[seg.name]
-			if !exists {
-				return nil, false, nil
-			}
-
-			current = v
-		}
-	}
-
-	return current, true, nil
-}
-
-// SerializeValue converts a raw value to its string representation for editor display.
-// Scalars are formatted with fmt, complex types (maps/slices) are marshaled as YAML.
-func SerializeValue(val any) string {
-	switch val.(type) {
-	case map[string]any, []any:
-		data, err := yaml.Marshal(val)
-		if err != nil {
-			return fmt.Sprintf("%v", val)
-		}
-
-		return strings.TrimRight(string(data), "\n")
-
-	default:
-		return fmt.Sprintf("%v", val)
-	}
-}
-
-// SerializeNodeSubtree finds a yaml.Node subtree by dot-separated key path
-// and marshals it, preserving YAML comments. Returns empty string and false
-// if the node tree is nil or the key path is not found.
-func SerializeNodeSubtree(nodeTree *yaml.Node, keyPath string, indent int) (string, bool) {
-	if nodeTree == nil {
-		return "", false
-	}
-
-	node := findNodeSubtree(nodeTree, keyPath)
-	if node == nil {
-		return "", false
-	}
-
-	var buf bytes.Buffer
-
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(indent)
-
-	if err := enc.Encode(node); err != nil {
-		return "", false
-	}
-
-	if err := enc.Close(); err != nil {
-		return "", false
-	}
-
-	return strings.TrimRight(buf.String(), "\n"), true
-}
-
 // findNodeSubtree walks a yaml.Node tree to find the value node at a dot-separated key path.
 // Supports array index segments like "servers[0].host" by navigating into SequenceNode children.
 func findNodeSubtree(root *yaml.Node, keyPath string) *yaml.Node {
@@ -412,93 +262,6 @@ func findMappingChild(node *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-// parseArraySegment splits "key[0]" into ("key", 0, true) or "[0]" into ("", 0, true).
-// For plain keys like "host" it returns ("host", 0, false).
-func parseArraySegment(seg string) (string, int, bool) {
-	bracketIdx := strings.IndexByte(seg, '[')
-	if bracketIdx < 0 {
-		return seg, 0, false
-	}
-
-	closeIdx := strings.IndexByte(seg[bracketIdx:], ']')
-	if closeIdx < 0 {
-		return seg, 0, false
-	}
-
-	idxStr := seg[bracketIdx+1 : bracketIdx+closeIdx]
-
-	idx, err := strconv.Atoi(idxStr)
-	if err != nil {
-		return seg, 0, false
-	}
-
-	return seg[:bracketIdx], idx, true
-}
-
-// AnchorNameRegex defines the legal character set for anchor names in this
-// app: letters, digits, underscore, and hyphen. YAML itself is more permissive
-// but a conservative subset avoids ambiguity and keeps user-facing display
-// predictable.
-var AnchorNameRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
-
-// SetNodeAnchor marks the node at flatKey as a YAML anchor named anchorName.
-// Mutates tree in place. When the target is reached via an alias, the alias is
-// broken before the anchor is set so the new anchor lives on a local copy, not
-// on a node shared with other aliases. Returns an error if tree is nil, the
-// key can't be reached as a physical location, or the name is invalid.
-func SetNodeAnchor(tree *yaml.Node, flatKey, anchorName string) error {
-	if tree == nil {
-		return errors.New("tree is nil")
-	}
-
-	if !AnchorNameRegex.MatchString(anchorName) {
-		return fmt.Errorf("invalid anchor name %q: must match %s", anchorName, AnchorNameRegex.String())
-	}
-
-	segments, err := parseKeySegments(flatKey)
-	if err != nil {
-		return fmt.Errorf("parse key %q: %w", flatKey, err)
-	}
-
-	if len(segments) == 0 {
-		return errors.New("empty key")
-	}
-
-	node, err := resolvePhysicalForMutation(tree, segments)
-	if err != nil {
-		return err
-	}
-
-	node.Anchor = anchorName
-
-	return nil
-}
-
-// ClearNodeAnchor removes the anchor name from the node at flatKey. Aliases
-// elsewhere in the tree that pointed at this anchor become dangling and will
-// fail to marshal; callers should either also convert those aliases to
-// literals first or accept the save failure. Returns nil if the target has no
-// anchor set.
-func ClearNodeAnchor(tree *yaml.Node, flatKey string) error {
-	if tree == nil {
-		return errors.New("tree is nil")
-	}
-
-	segments, err := parseKeySegments(flatKey)
-	if err != nil {
-		return fmt.Errorf("parse key %q: %w", flatKey, err)
-	}
-
-	node, err := resolvePhysicalForMutation(tree, segments)
-	if err != nil {
-		return err
-	}
-
-	node.Anchor = ""
-
-	return nil
-}
-
 // EnsurePath guarantees that flatKey exists in tree as a physical entry,
 // creating the path with a scalar holding (value, typ) when missing. No-op
 // when already present. Used by anchor/alias mutations so they don't fail
@@ -529,215 +292,6 @@ func EnsurePath(tree *yaml.Node, flatKey, value, typ string) error {
 	}
 
 	return nil
-}
-
-// RenameAnchor replaces the anchor name oldName with newName on the source
-// node and on every alias that references it. Mutates tree in place. Returns
-// an error if oldName is not defined anywhere, or if newName is not a legal
-// anchor identifier.
-//
-// The .Alias pointer on each alias node continues to target the same source
-// node, so no re-linking is needed — only the user-visible name changes on
-// the source (.Anchor) and aliases (.Value).
-func RenameAnchor(tree *yaml.Node, oldName, newName string) error {
-	if tree == nil {
-		return errors.New("tree is nil")
-	}
-
-	if !AnchorNameRegex.MatchString(newName) {
-		return fmt.Errorf("invalid anchor name %q: must match %s", newName, AnchorNameRegex.String())
-	}
-
-	if oldName == newName {
-		return nil
-	}
-
-	if findAnchorNode(tree, oldName) == nil {
-		return fmt.Errorf("anchor %q not found in tree", oldName)
-	}
-
-	if findAnchorNode(tree, newName) != nil {
-		return fmt.Errorf("anchor %q already exists — choose a different name", newName)
-	}
-
-	visitNodes(tree, func(n *yaml.Node) {
-		if n.Kind == yaml.AliasNode && n.Value == oldName {
-			n.Value = newName
-
-			return
-		}
-
-		if n.Anchor == oldName {
-			n.Anchor = newName
-		}
-	})
-
-	return nil
-}
-
-// DeleteAnchor removes an anchor and all references to it. Every alias
-// pointing at the anchor is severed via breakAliasInPlace (its slot is
-// replaced with a deep copy of the target's current contents); then the
-// anchor definition's .Anchor field is cleared. Returns an error if the
-// anchor isn't defined.
-//
-// No values are lost — the file simply no longer uses the anchor/alias
-// syntax. Cells that were aliases keep their effective (resolved) values
-// as plain YAML literals in place.
-func DeleteAnchor(tree *yaml.Node, name string) error {
-	if tree == nil {
-		return errors.New("tree is nil")
-	}
-
-	source := findAnchorNode(tree, name)
-	if source == nil {
-		return fmt.Errorf("anchor %q not found in tree", name)
-	}
-
-	// Collect the alias nodes first — mutating them during traversal is
-	// fine for this walker (breakAliasInPlace only touches the node's own
-	// fields) but deferring makes the intent explicit.
-	var aliases []*yaml.Node
-
-	visitNodes(tree, func(n *yaml.Node) {
-		if n.Kind == yaml.AliasNode && n.Value == name {
-			aliases = append(aliases, n)
-		}
-	})
-
-	for _, a := range aliases {
-		breakAliasInPlace(a)
-	}
-
-	source.Anchor = ""
-
-	return nil
-}
-
-// visitNodes invokes visit on every non-nil descendant of root, including
-// root itself. Recurses through Content; aliases are visited but not
-// followed (the walker does not chase .Alias pointers, so anchor targets
-// are visited via their regular position in the tree).
-func visitNodes(root *yaml.Node, visit func(*yaml.Node)) {
-	if root == nil {
-		return
-	}
-
-	visit(root)
-
-	for _, c := range root.Content {
-		visitNodes(c, visit)
-	}
-}
-
-// ClearNodeAlias replaces the alias at flatKey with a local deep copy of the
-// anchored target's current contents. The anchor definition elsewhere stays
-// intact; only this usage site is severed. No-op when the node at flatKey
-// is not an alias. Returns an error if the path can't be reached.
-func ClearNodeAlias(tree *yaml.Node, flatKey string) error {
-	if tree == nil {
-		return errors.New("tree is nil")
-	}
-
-	segments, err := parseKeySegments(flatKey)
-	if err != nil {
-		return fmt.Errorf("parse key %q: %w", flatKey, err)
-	}
-
-	if len(segments) == 0 {
-		return errors.New("empty key")
-	}
-
-	parent, childIdx, err := findParentSlot(tree, segments)
-	if err != nil {
-		return err
-	}
-
-	node := parent.Content[childIdx]
-	if node.Kind != yaml.AliasNode {
-		return nil
-	}
-
-	breakAliasInPlace(node)
-
-	return nil
-}
-
-// SetNodeAlias replaces the node at flatKey with an alias pointing at the
-// anchor named anchorName. The anchor must exist elsewhere in the tree.
-// Mutates tree in place. Returns an error if the anchor can't be found or
-// if flatKey is the anchor's own defining location (would create a cycle).
-func SetNodeAlias(tree *yaml.Node, flatKey, anchorName string) error {
-	if tree == nil {
-		return errors.New("tree is nil")
-	}
-
-	segments, err := parseKeySegments(flatKey)
-	if err != nil {
-		return fmt.Errorf("parse key %q: %w", flatKey, err)
-	}
-
-	if len(segments) == 0 {
-		return errors.New("empty key")
-	}
-
-	target := findAnchorNode(tree, anchorName)
-	if target == nil {
-		return fmt.Errorf("anchor %q not found in tree", anchorName)
-	}
-
-	parent, childIdx, err := findParentSlot(tree, segments)
-	if err != nil {
-		return err
-	}
-
-	if parent.Content[childIdx] == target {
-		return fmt.Errorf("cannot alias %q to itself (it is the anchor's defining location)", flatKey)
-	}
-
-	// Keep the alias's own comments from the prior node so annotations at this
-	// site survive the conversion.
-	prev := parent.Content[childIdx]
-	alias := &yaml.Node{
-		Kind:        yaml.AliasNode,
-		Value:       anchorName,
-		Alias:       target,
-		HeadComment: prev.HeadComment,
-		LineComment: prev.LineComment,
-		FootComment: prev.FootComment,
-	}
-	parent.Content[childIdx] = alias
-
-	return nil
-}
-
-// findAnchorNode returns the first node in the tree whose .Anchor equals name,
-// or nil. Walks via mapping children, sequence items, and alias targets so
-// anchors reachable through merge keys are still found.
-func findAnchorNode(root *yaml.Node, name string) *yaml.Node {
-	var found *yaml.Node
-
-	var walk func(n *yaml.Node)
-
-	walk = func(n *yaml.Node) {
-		if n == nil || found != nil {
-			return
-		}
-
-		if n.Anchor == name && n.Kind != yaml.AliasNode {
-			found = n
-
-			return
-		}
-
-		for _, c := range n.Content {
-			walk(c)
-		}
-	}
-
-	walk(root)
-
-	return found
 }
 
 // resolvePhysicalForMutation walks segments and returns the final leaf node,
@@ -841,85 +395,6 @@ func findParentSlot(tree *yaml.Node, segments []keySegment) (*yaml.Node, int, er
 	return current, idx + 1, nil
 }
 
-// PatchNodeTree re-serializes a values file by mutating a deep copy of the
-// parsed yaml.Node tree rather than rebuilding from scratch. This preserves
-// anchors, aliases, comments, and scalar styles for subtrees the user did not
-// edit. Falls back to FlatEntriesToYAML when no mapping root is available.
-//
-// Behavior for YAML anchors and aliases:
-//   - Leaves whose editor value equals the underlying scalar (after alias
-//     resolution) are left untouched, so aliases survive unedited saves.
-//   - An edit that changes an aliased leaf breaks the alias locally: the
-//     anchored node is deep-copied into the alias position and then patched.
-//     The anchor definition and any other aliases pointing at it stay intact.
-//   - Anchors attached to an edited scalar leaf are preserved on the node so
-//     aliases elsewhere continue to resolve (to the new value).
-//
-// Behavior for YAML merge keys (`<<: *base`):
-//   - Inherited keys are not treated as physically present. Upserts create a
-//     new sibling entry that shadows the merge, which matches how Helm would
-//     evaluate the override. Clearing an inherited-only key is a no-op — the
-//     value comes from the merge target, not the local mapping.
-func PatchNodeTree(root *yaml.Node, entries []OverrideEntry, indent int) (string, error) {
-	if root == nil || root.Kind != yaml.MappingNode {
-		return FlatEntriesToYAML(entries, indent)
-	}
-
-	workingTree := deepCopyYAMLNode(root)
-
-	want := make(map[string]OverrideEntry, len(entries))
-	for _, e := range entries {
-		want[e.Key] = e
-	}
-
-	for _, k := range collectPhysicalLeafKeys(workingTree) {
-		if _, keep := want[k]; keep {
-			continue
-		}
-
-		segs, err := parseKeySegments(k)
-		if err != nil {
-			return "", fmt.Errorf("parse stale key %q: %w", k, err)
-		}
-
-		deletePath(workingTree, segs)
-	}
-
-	for _, e := range entries {
-		segments, err := parseKeySegments(e.Key)
-		if err != nil {
-			return "", fmt.Errorf("parse key %q: %w", e.Key, err)
-		}
-
-		if len(segments) == 0 {
-			continue
-		}
-
-		if effective, ok := findEffectiveScalar(workingTree, segments); ok && effective == e.Value {
-			continue
-		}
-
-		if err := upsertPath(workingTree, segments, convertValue(e.Value, e.Type)); err != nil {
-			return "", fmt.Errorf("upsert key %q: %w", e.Key, err)
-		}
-	}
-
-	var buf bytes.Buffer
-
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(indent)
-
-	if err := enc.Encode(workingTree); err != nil {
-		return "", fmt.Errorf("marshal patched tree: %w", err)
-	}
-
-	if err := enc.Close(); err != nil {
-		return "", fmt.Errorf("close YAML encoder: %w", err)
-	}
-
-	return buf.String(), nil
-}
-
 // deepCopyYAMLNode clones a yaml.Node tree so the original stays unchanged.
 // Shared alias-to-anchor references are preserved: multiple alias nodes that
 // point at the same anchor in the input will still share a target in the copy.
@@ -962,62 +437,6 @@ func copyNodeRec(n *yaml.Node, seen map[*yaml.Node]*yaml.Node) *yaml.Node {
 	}
 
 	return cp
-}
-
-// ExtractAnchors walks root and returns a map from flat key to AnchorInfo for
-// every node that either defines an anchor (`&name`) or is an alias usage
-// (`*name`). Returns nil when the tree contains no anchors or aliases, so
-// callers can use map-is-nil as a cheap "no badges to render" check.
-//
-// Keys inherited via merge keys (`<<: *base`) are not annotated; the badge
-// should live at the alias or anchor position, not on every inherited leaf.
-func ExtractAnchors(root *yaml.Node) map[string]AnchorInfo {
-	if root == nil {
-		return nil
-	}
-
-	out := make(map[string]AnchorInfo)
-	walkAnchors(root, "", out)
-
-	if len(out) == 0 {
-		return nil
-	}
-
-	return out
-}
-
-func walkAnchors(n *yaml.Node, prefix string, out map[string]AnchorInfo) {
-	if n == nil {
-		return
-	}
-
-	if n.Kind == yaml.AliasNode {
-		if prefix != "" && n.Value != "" {
-			out[prefix] = AnchorInfo{Role: AnchorRoleAlias, Name: n.Value}
-		}
-
-		return
-	}
-
-	if n.Anchor != "" && prefix != "" {
-		out[prefix] = AnchorInfo{Role: AnchorRoleAnchor, Name: n.Anchor}
-	}
-
-	switch n.Kind {
-	case yaml.MappingNode:
-		forEachMappingChild(n, prefix, func(childPrefix string, child *yaml.Node) {
-			walkAnchors(child, childPrefix, out)
-		})
-
-	case yaml.SequenceNode:
-		for i, c := range n.Content {
-			walkAnchors(c, prefix+"["+strconv.Itoa(i)+"]", out)
-		}
-
-	case yaml.ScalarNode, yaml.DocumentNode, yaml.AliasNode:
-		// Scalars have no children; aliases handled above; document nodes not
-		// expected inside a root mapping walk.
-	}
 }
 
 // forEachMappingChild invokes visit for every non-merge key/value pair in a
@@ -1095,75 +514,6 @@ func walkPhysicalLeaves(n *yaml.Node, prefix string, out *[]string) {
 	}
 }
 
-// EffectiveScalarAt walks tree to flatKey resolving aliases and merge keys,
-// and returns the scalar value that a YAML consumer would see at that path.
-// Returns ("", false) when the path doesn't resolve to a scalar.
-func EffectiveScalarAt(tree *yaml.Node, flatKey string) (string, bool) {
-	if tree == nil {
-		return "", false
-	}
-
-	segments, err := parseKeySegments(flatKey)
-	if err != nil {
-		return "", false
-	}
-
-	return findEffectiveScalar(tree, segments)
-}
-
-// findEffectiveScalar walks from root to segments resolving aliases and merge
-// keys, and returns the scalar value that a YAML consumer would see at that
-// path. Returns ("", false) when the path resolves to a non-scalar, a missing
-// key, or cannot be resolved (e.g. merge source is not a mapping). Used to
-// decide whether an override value is identical to what the file already
-// yields — if so, writing it again would add a noisy local sibling that
-// shadows a merge or anchor for no reason.
-func findEffectiveScalar(root *yaml.Node, segments []keySegment) (string, bool) {
-	current := resolveAlias(root)
-
-	for _, seg := range segments {
-		if current == nil {
-			return "", false
-		}
-
-		if seg.isIndex {
-			if current.Kind != yaml.SequenceNode || seg.index >= len(current.Content) {
-				return "", false
-			}
-
-			current = resolveAlias(current.Content[seg.index])
-
-			continue
-		}
-
-		if current.Kind != yaml.MappingNode {
-			return "", false
-		}
-
-		next := mappingValueWithMerge(current, seg.name)
-		if next == nil {
-			return "", false
-		}
-
-		current = resolveAlias(next)
-	}
-
-	if current == nil || current.Kind != yaml.ScalarNode {
-		return "", false
-	}
-
-	return current.Value, true
-}
-
-// resolveAlias follows alias pointers until a non-alias node is reached.
-func resolveAlias(n *yaml.Node) *yaml.Node {
-	for n != nil && n.Kind == yaml.AliasNode {
-		n = n.Alias
-	}
-
-	return n
-}
-
 // mappingValueWithMerge returns the value for name in a mapping, searching
 // the local entries first and then any merge-key sources (<<: *anchor) in
 // insertion order. Returns nil when the key is not reachable.
@@ -1225,29 +575,6 @@ func mappingKeyIndex(m *yaml.Node, name string) int {
 	}
 
 	return -1
-}
-
-// breakAliasInPlace converts an alias node into a local deep copy of its
-// target, severing the alias at this position. The alias's own comments stay
-// on the node so inline documentation at the alias site is preserved.
-func breakAliasInPlace(alias *yaml.Node) {
-	if alias.Kind != yaml.AliasNode || alias.Alias == nil {
-		return
-	}
-
-	cp := deepCopyYAMLNode(alias.Alias)
-	head, line, foot := alias.HeadComment, alias.LineComment, alias.FootComment
-
-	alias.Kind = cp.Kind
-	alias.Style = cp.Style
-	alias.Tag = cp.Tag
-	alias.Value = cp.Value
-	alias.Anchor = ""
-	alias.Alias = nil
-	alias.Content = cp.Content
-	alias.HeadComment = head
-	alias.LineComment = line
-	alias.FootComment = foot
 }
 
 // leafNodeFromValue builds a scalar node from the converted override value.

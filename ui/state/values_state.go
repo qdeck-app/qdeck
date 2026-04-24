@@ -291,6 +291,21 @@ func (s *ValuesPageState) ChartKey() string {
 	return domain.ChartKey(s.RepoName, s.ChartName, s.OciRef, s.ChartPath, s.Version)
 }
 
+// FocusedEntryKey resolves the flat key of the currently focused row, or "" if
+// no row is focused or the focused index is out of bounds.
+func (s *ValuesPageState) FocusedEntryKey() string {
+	if s.FocusedRow < 0 || s.FocusedRow >= len(s.FilteredIndices) {
+		return ""
+	}
+
+	idx := s.FilteredIndices[s.FocusedRow]
+	if idx >= len(s.Entries) {
+		return ""
+	}
+
+	return s.Entries[idx].Key
+}
+
 // RebuildUnifiedEntries recomputes Entries as the union of DefaultValues.Entries
 // and any keys present only in active columns' CustomValues. Entries are sorted
 // by flat key. Returns the previous Entries slice (for caller-side editor
