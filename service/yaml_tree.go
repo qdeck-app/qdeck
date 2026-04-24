@@ -119,7 +119,6 @@ func parseArraySegment(seg string) (string, int, bool) {
 	return seg[:bracketIdx], idx, true
 }
 
-// setInParent writes val back into the parent container.
 func setInParent(p parentRef, val any) error {
 	if p.isIndex {
 		slice, ok := p.container.([]any)
@@ -212,8 +211,8 @@ func setNestedValue(root map[string]any, segments []keySegment, value any) error
 	return nil
 }
 
-// findNodeSubtree walks a yaml.Node tree to find the value node at a dot-separated key path.
-// Supports array index segments like "servers[0].host" by navigating into SequenceNode children.
+// findNodeSubtree supports array index segments like "servers[0].host" by
+// navigating into SequenceNode children.
 func findNodeSubtree(root *yaml.Node, keyPath string) *yaml.Node {
 	segments := strings.Split(keyPath, ".")
 	current := root
@@ -247,7 +246,6 @@ func findNodeSubtree(root *yaml.Node, keyPath string) *yaml.Node {
 	return current
 }
 
-// findMappingChild returns the value node for a key in a MappingNode, or nil.
 func findMappingChild(node *yaml.Node, key string) *yaml.Node {
 	if node.Kind != yaml.MappingNode {
 		return nil
@@ -294,6 +292,36 @@ func EnsurePath(tree *yaml.Node, flatKey, value, typ string) error {
 	return nil
 }
 
+// stepPhysical advances current by one existing segment, breaking any alias
+// encountered so the mutation never leaks into a shared anchor target. Returns
+// an error when the segment can't be resolved as a physical entry (out-of-range
+// index, non-mapping parent, missing key). Used by all yaml.Node read-for-
+// mutation walkers to keep their stepping logic in one place.
+func stepPhysical(current *yaml.Node, seg keySegment, i int) (*yaml.Node, error) {
+	if current.Kind == yaml.AliasNode {
+		breakAliasInPlace(current)
+	}
+
+	if seg.isIndex {
+		if current.Kind != yaml.SequenceNode || seg.index < 0 || seg.index >= len(current.Content) {
+			return nil, fmt.Errorf("segment %d: index %d out of range", i, seg.index)
+		}
+
+		return current.Content[seg.index], nil
+	}
+
+	if current.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("segment %d (%q): parent is not a mapping", i, seg.name)
+	}
+
+	idx := mappingKeyIndex(current, seg.name)
+	if idx < 0 {
+		return nil, fmt.Errorf("segment %d (%q): key not present in local mapping", i, seg.name)
+	}
+
+	return current.Content[idx+1], nil
+}
+
 // resolvePhysicalForMutation walks segments and returns the final leaf node,
 // breaking any alias encountered along the way so mutation never leaks into
 // an anchor's shared target. Returns an error if the path is missing
@@ -302,39 +330,22 @@ func resolvePhysicalForMutation(tree *yaml.Node, segments []keySegment) (*yaml.N
 	current := tree
 
 	for i, seg := range segments {
-		if current.Kind == yaml.AliasNode {
-			breakAliasInPlace(current)
+		next, err := stepPhysical(current, seg, i)
+		if err != nil {
+			return nil, err
 		}
 
-		if seg.isIndex {
-			if current.Kind != yaml.SequenceNode || seg.index < 0 || seg.index >= len(current.Content) {
-				return nil, fmt.Errorf("segment %d: index %d out of range", i, seg.index)
-			}
-
-			current = current.Content[seg.index]
-
-			continue
-		}
-
-		if current.Kind != yaml.MappingNode {
-			return nil, fmt.Errorf("segment %d (%q): parent is not a mapping", i, seg.name)
-		}
-
-		idx := mappingKeyIndex(current, seg.name)
-		if idx < 0 {
-			return nil, fmt.Errorf("segment %d (%q): key not present in local mapping", i, seg.name)
-		}
-
-		current = current.Content[idx+1]
+		current = next
 	}
 
 	return current, nil
 }
 
 // findParentSlot walks to the parent of the final segment and returns the
-// parent node plus the Content index holding the final child, so the caller
-// can swap the child (e.g. replace it with an AliasNode). Breaks aliases
-// along the way for mutation safety.
+// parent node plus the Content index holding the final child's value, so the
+// caller can swap the child (e.g. replace it with an AliasNode). For mappings
+// the returned index is the value's position, so the key sits at index-1.
+// Breaks aliases along the way for mutation safety.
 func findParentSlot(tree *yaml.Node, segments []keySegment) (*yaml.Node, int, error) {
 	if len(segments) == 0 {
 		return nil, 0, errors.New("empty segments")
@@ -343,31 +354,12 @@ func findParentSlot(tree *yaml.Node, segments []keySegment) (*yaml.Node, int, er
 	current := tree
 
 	for i := 0; i < len(segments)-1; i++ {
-		if current.Kind == yaml.AliasNode {
-			breakAliasInPlace(current)
+		next, err := stepPhysical(current, segments[i], i)
+		if err != nil {
+			return nil, 0, err
 		}
 
-		seg := segments[i]
-		if seg.isIndex {
-			if current.Kind != yaml.SequenceNode || seg.index >= len(current.Content) {
-				return nil, 0, fmt.Errorf("segment %d: index %d out of range", i, seg.index)
-			}
-
-			current = current.Content[seg.index]
-
-			continue
-		}
-
-		if current.Kind != yaml.MappingNode {
-			return nil, 0, fmt.Errorf("segment %d (%q): parent is not a mapping", i, seg.name)
-		}
-
-		idx := mappingKeyIndex(current, seg.name)
-		if idx < 0 {
-			return nil, 0, fmt.Errorf("segment %d (%q): key not present in local mapping", i, seg.name)
-		}
-
-		current = current.Content[idx+1]
+		current = next
 	}
 
 	if current.Kind == yaml.AliasNode {
@@ -395,9 +387,9 @@ func findParentSlot(tree *yaml.Node, segments []keySegment) (*yaml.Node, int, er
 	return current, idx + 1, nil
 }
 
-// deepCopyYAMLNode clones a yaml.Node tree so the original stays unchanged.
-// Shared alias-to-anchor references are preserved: multiple alias nodes that
-// point at the same anchor in the input will still share a target in the copy.
+// deepCopyYAMLNode preserves shared alias-to-anchor references: multiple alias
+// nodes that point at the same anchor in the input still share a target in the
+// copy.
 func deepCopyYAMLNode(n *yaml.Node) *yaml.Node {
 	return copyNodeRec(n, make(map[*yaml.Node]*yaml.Node))
 }
@@ -750,67 +742,25 @@ func containerForNextSegment(next keySegment) *yaml.Node {
 // are broken (deep-copied) so the deletion stays local. Returns false if the
 // key is not physically present (e.g. inherited via a merge key).
 func deletePath(root *yaml.Node, segments []keySegment) bool {
-	if len(segments) == 0 {
+	parent, slot, err := findParentSlot(root, segments)
+	if err != nil {
 		return false
 	}
 
-	current := root
-
-	for i, seg := range segments {
-		isLast := i == len(segments)-1
-
-		if current.Kind == yaml.AliasNode {
-			breakAliasInPlace(current)
-		}
-
-		if seg.isIndex {
-			if current.Kind != yaml.SequenceNode || seg.index >= len(current.Content) {
-				return false
-			}
-
-			if isLast {
-				current.Content = append(current.Content[:seg.index], current.Content[seg.index+1:]...)
-
-				return true
-			}
-
-			child := current.Content[seg.index]
-			if child.Kind == yaml.AliasNode {
-				breakAliasInPlace(child)
-			}
-
-			current = child
-
-			continue
-		}
-
-		if current.Kind != yaml.MappingNode {
-			return false
-		}
-
-		idx := mappingKeyIndex(current, seg.name)
-		if idx < 0 {
-			return false
-		}
-
-		if isLast {
-			current.Content = append(current.Content[:idx], current.Content[idx+2:]...)
-
-			return true
-		}
-
-		child := current.Content[idx+1]
-		if child.Kind == yaml.AliasNode {
-			breakAliasInPlace(child)
-		}
-
-		current = child
+	switch parent.Kind {
+	case yaml.SequenceNode:
+		parent.Content = append(parent.Content[:slot], parent.Content[slot+1:]...)
+	case yaml.MappingNode:
+		// findParentSlot returns the value index for mappings; the key sits at
+		// slot-1. Remove the key/value pair as a unit.
+		parent.Content = append(parent.Content[:slot-1], parent.Content[slot+1:]...)
+	default:
+		return false
 	}
 
-	return false
+	return true
 }
 
-// convertValue converts a string value to the appropriate Go type for YAML marshaling.
 func convertValue(value, typ string) any {
 	switch typ {
 	case "number":

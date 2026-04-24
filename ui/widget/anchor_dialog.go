@@ -80,9 +80,10 @@ type AnchorDialog struct {
 	itemPrefix string
 	itemClicks []widget.Clickable
 
-	// visibleIndexes is a scratch slice reused across frames to filter items
-	// by the search editor's text without per-frame allocation.
-	visibleIndexes []int
+	// scratchVisible stores the indexes of Items passing the current search
+	// filter. Reused across frames (see rebuildVisible) to avoid per-frame
+	// allocation per the no-UI-alloc convention.
+	scratchVisible []int
 
 	// selectedIdx is the index into Items of the keyboard-selected row.
 	// Advanced by Up/Down arrows; used to highlight a row and to drive
@@ -141,7 +142,7 @@ func (d *AnchorDialog) setupListMode(items []string, prefix string) {
 	d.SearchEditor.Submit = true
 	d.submittedValue = ""
 	d.focusTarget = &d.SearchEditor
-	d.visibleIndexes = d.visibleIndexes[:0]
+	d.scratchVisible = d.scratchVisible[:0]
 
 	if len(items) > 0 {
 		d.selectedIdx = 0
@@ -216,7 +217,7 @@ func (d *AnchorDialog) updateList(gtx layout.Context, mode AnchorDialogMode) Anc
 
 	// Arrow-key navigation and Escape scoped to the search editor's focus
 	// so the editor's own key handling doesn't shadow them. Escape cancels;
-	// Up/Down move the selection through visibleIndexes.
+	// Up/Down move the selection through scratchVisible.
 	for {
 		ev, ok := gtx.Event(
 			key.Filter{Focus: &d.SearchEditor, Name: key.NameEscape},
@@ -279,14 +280,14 @@ func (d *AnchorDialog) updateList(gtx layout.Context, mode AnchorDialogMode) Anc
 	return AnchorActionNone
 }
 
-// moveSelection advances d.selectedIdx by delta through visibleIndexes. If
+// moveSelection advances d.selectedIdx by delta through scratchVisible. If
 // the current selection isn't in the visible set (e.g. filtered out), the
 // move snaps to either the first or last visible item depending on
 // direction. No-op when no items are visible.
 func (d *AnchorDialog) moveSelection(delta int) {
 	d.rebuildVisible()
 
-	if len(d.visibleIndexes) == 0 {
+	if len(d.scratchVisible) == 0 {
 		d.selectedIdx = -1
 
 		return
@@ -294,7 +295,7 @@ func (d *AnchorDialog) moveSelection(delta int) {
 
 	cur := -1
 
-	for i, origIdx := range d.visibleIndexes {
+	for i, origIdx := range d.scratchVisible {
 		if origIdx == d.selectedIdx {
 			cur = i
 
@@ -307,7 +308,7 @@ func (d *AnchorDialog) moveSelection(delta int) {
 		if delta > 0 {
 			next = 0
 		} else {
-			next = len(d.visibleIndexes) - 1
+			next = len(d.scratchVisible) - 1
 		}
 	}
 
@@ -315,11 +316,11 @@ func (d *AnchorDialog) moveSelection(delta int) {
 		next = 0
 	}
 
-	if next >= len(d.visibleIndexes) {
-		next = len(d.visibleIndexes) - 1
+	if next >= len(d.scratchVisible) {
+		next = len(d.scratchVisible) - 1
 	}
 
-	d.selectedIdx = d.visibleIndexes[next]
+	d.selectedIdx = d.scratchVisible[next]
 }
 
 // submitSelected attempts to submit the currently selected item. Falls back
@@ -328,14 +329,14 @@ func (d *AnchorDialog) moveSelection(delta int) {
 func (d *AnchorDialog) submitSelected() AnchorDialogAction {
 	d.rebuildVisible()
 
-	if len(d.visibleIndexes) == 0 {
+	if len(d.scratchVisible) == 0 {
 		return AnchorActionNone
 	}
 
 	target := d.selectedIdx
 	inVisible := false
 
-	for _, origIdx := range d.visibleIndexes {
+	for _, origIdx := range d.scratchVisible {
 		if origIdx == target {
 			inVisible = true
 
@@ -344,7 +345,7 @@ func (d *AnchorDialog) submitSelected() AnchorDialogAction {
 	}
 
 	if !inVisible {
-		target = d.visibleIndexes[0]
+		target = d.scratchVisible[0]
 	}
 
 	if target < 0 || target >= len(d.Items) {
@@ -367,36 +368,36 @@ func (d *AnchorDialog) submitFromNameEditor() AnchorDialogAction {
 	return AnchorActionSubmit
 }
 
-// rebuildVisible refreshes visibleIndexes to match items passing the current
+// rebuildVisible refreshes scratchVisible to match items passing the current
 // search filter. Reuses the backing array across frames to avoid per-frame
 // allocation (per the codebase's no-UI-alloc convention). Also re-anchors
 // selectedIdx so it always points at a visible item after filter changes —
 // without this, the highlight would disappear after typing a query that
 // filters out the previous selection.
 func (d *AnchorDialog) rebuildVisible() {
-	d.visibleIndexes = d.visibleIndexes[:0]
+	d.scratchVisible = d.scratchVisible[:0]
 
 	query := strings.ToLower(strings.TrimSpace(d.SearchEditor.Text()))
 
 	for i, item := range d.Items {
 		if query == "" || strings.Contains(strings.ToLower(item), query) {
-			d.visibleIndexes = append(d.visibleIndexes, i)
+			d.scratchVisible = append(d.scratchVisible, i)
 		}
 	}
 
-	if len(d.visibleIndexes) == 0 {
+	if len(d.scratchVisible) == 0 {
 		d.selectedIdx = -1
 
 		return
 	}
 
-	for _, origIdx := range d.visibleIndexes {
+	for _, origIdx := range d.scratchVisible {
 		if origIdx == d.selectedIdx {
 			return
 		}
 	}
 
-	d.selectedIdx = d.visibleIndexes[0]
+	d.selectedIdx = d.scratchVisible[0]
 }
 
 // Layout renders the dialog. mode controls the body; title is the header label.
@@ -508,7 +509,7 @@ func (d *AnchorDialog) layoutTextInput(
 
 // layoutSearchableList renders a search field above a filterable clickable
 // list. The list is bounded in height and populated from d.Items, filtered
-// through visibleIndexes. Used by both Alias (pick an anchor name) and
+// through scratchVisible. Used by both Alias (pick an anchor name) and
 // AliasesOf (pick a usage site) modes.
 func (d *AnchorDialog) layoutSearchableList(
 	gtx layout.Context, th *material.Theme, mode AnchorDialogMode,
@@ -525,7 +526,7 @@ func (d *AnchorDialog) layoutSearchableList(
 		}),
 		layout.Rigid(layout.Spacer{Height: anchorDialogSmallGap}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if len(d.visibleIndexes) == 0 {
+			if len(d.scratchVisible) == 0 {
 				return LayoutLabel(gtx, material.Caption(th, "No matches."))
 			}
 
@@ -547,9 +548,9 @@ func (d *AnchorDialog) emptyHint(mode AnchorDialogMode) string {
 }
 
 func (d *AnchorDialog) buildListChildren(th *material.Theme) []layout.FlexChild {
-	children := make([]layout.FlexChild, 0, len(d.visibleIndexes))
+	children := make([]layout.FlexChild, 0, len(d.scratchVisible))
 
-	for _, origIdx := range d.visibleIndexes {
+	for _, origIdx := range d.scratchVisible {
 		idx := origIdx
 
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {

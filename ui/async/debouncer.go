@@ -75,14 +75,11 @@ func (d *Debouncer[T]) flush() {
 
 	d.mu.Lock()
 	d.inFlight = false
-	hasMore := d.pending != nil
 
-	if hasMore {
-		if d.timer == nil {
-			d.timer = time.AfterFunc(d.delay, d.flush)
-		} else {
-			d.timer.Reset(d.delay)
-		}
+	// d.timer is always non-nil by the time flush runs (Schedule sets it and
+	// never clears it). Resetting a fired time.AfterFunc timer is safe.
+	if d.pending != nil {
+		d.timer.Reset(d.delay)
 	}
 
 	d.mu.Unlock()

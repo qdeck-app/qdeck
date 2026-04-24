@@ -3,34 +3,11 @@ package widget
 import (
 	"image"
 	"image/color"
-	"strings"
 
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 )
-
-// lastSegment returns the portion after the last dot in a key path.
-func lastSegment(key string) string {
-	idx := strings.LastIndexByte(key, '.')
-
-	if idx < 0 {
-		return key
-	}
-
-	return key[idx+1:]
-}
-
-// parentPath returns the portion before the last dot, or "" for root-level keys.
-func parentPath(key string) string {
-	idx := strings.LastIndexByte(key, '.')
-
-	if idx < 0 {
-		return ""
-	}
-
-	return key[:idx]
-}
 
 // EdgeBorders returns four edge rectangles forming a border inside the given bounds.
 func EdgeBorders(bounds image.Rectangle, w int) [4]image.Rectangle {

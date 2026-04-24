@@ -1,8 +1,6 @@
 package font
 
 import (
-	"sync"
-
 	"gioui.org/font"
 	"gioui.org/font/opentype"
 )
@@ -14,24 +12,22 @@ import (
 // characters outside the embedded font's coverage.
 const Typeface font.Typeface = "QDeck Mono"
 
-var (
-	collection []font.FontFace
-	once       sync.Once
-)
+//nolint:gochecknoglobals // parsed once at init from embedded data
+var collection []font.FontFace
+
+func init() { //nolint:gochecknoinits // parsed once from embedded font data; trivial and side-effect-free
+	faces, err := opentype.ParseCollection(fontData)
+	if err != nil {
+		panic("failed to parse font: " + err.Error())
+	}
+
+	for i := range faces {
+		faces[i].Font.Typeface = Typeface
+	}
+
+	collection = faces
+}
 
 func Collection() []font.FontFace {
-	once.Do(func() {
-		faces, err := opentype.ParseCollection(fontData)
-		if err != nil {
-			panic("failed to parse font: " + err.Error())
-		}
-
-		for i := range faces {
-			faces[i].Font.Typeface = Typeface
-		}
-
-		collection = append(collection, faces...)
-	})
-
 	return collection
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/qdeck-app/qdeck/ui/theme"
 )
 
-// drawChevronTriangle paints a filled triangle centered inside `slot`.
 func drawChevronTriangle(gtx layout.Context, slot image.Point, collapsed bool) {
 	const half float32 = 0.5
 

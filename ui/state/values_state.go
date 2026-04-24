@@ -526,12 +526,8 @@ func (s *ValuesPageState) HasOverrideInAnyColumn(entryIdx int) bool {
 	return false
 }
 
-// EnsureRecentValuesClickables grows recent values clickable slices.
 func (s *ValuesPageState) EnsureRecentValuesClickables(count int) {
-	for len(s.RecentValuesClicks) < count {
-		s.RecentValuesClicks = append(s.RecentValuesClicks, widget.Clickable{})
-		s.RecentValuesRemoveClicks = append(s.RecentValuesRemoveClicks, widget.Clickable{})
-	}
+	growClickables(count, &s.RecentValuesClicks, &s.RecentValuesRemoveClicks)
 }
 
 // RebuildHelmInstallCmd reconstructs the cached helm install command from

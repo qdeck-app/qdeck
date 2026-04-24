@@ -104,35 +104,20 @@ type RepoPageState struct {
 	ValuesSectionMinY int
 }
 
-// EnsureClickables grows clickable slices to match repo count.
-// Only allocates when the repo list grows beyond current capacity.
+// EnsureClickables grows clickable slices to match repo count. Only allocates
+// when the repo list grows beyond current capacity.
 func (s *RepoPageState) EnsureClickables(count int) {
-	for len(s.RepoClicks) < count {
-		s.RepoClicks = append(s.RepoClicks, widget.Clickable{})
-		s.DeleteClicks = append(s.DeleteClicks, widget.Clickable{})
-		s.UpdateClicks = append(s.UpdateClicks, widget.Clickable{})
-	}
+	growClickables(count, &s.RepoClicks, &s.DeleteClicks, &s.UpdateClicks)
 }
 
-// EnsurePresetClickables grows preset clickable slice to match the given count.
 func (s *RepoPageState) EnsurePresetClickables(count int) {
-	for len(s.PresetClicks) < count {
-		s.PresetClicks = append(s.PresetClicks, widget.Clickable{})
-	}
+	growClickables(count, &s.PresetClicks)
 }
 
-// EnsureRecentClickables grows recent chart clickable slices.
 func (s *RepoPageState) EnsureRecentClickables(count int) {
-	for len(s.RecentClicks) < count {
-		s.RecentClicks = append(s.RecentClicks, widget.Clickable{})
-		s.RecentRemoveClicks = append(s.RecentRemoveClicks, widget.Clickable{})
-	}
+	growClickables(count, &s.RecentClicks, &s.RecentRemoveClicks)
 }
 
-// EnsureRecentValuesClickables grows recent values entry clickable slices.
 func (s *RepoPageState) EnsureRecentValuesClickables(count int) {
-	for len(s.RecentValuesClicks) < count {
-		s.RecentValuesClicks = append(s.RecentValuesClicks, widget.Clickable{})
-		s.RecentValuesRemoveClicks = append(s.RecentValuesRemoveClicks, widget.Clickable{})
-	}
+	growClickables(count, &s.RecentValuesClicks, &s.RecentValuesRemoveClicks)
 }
