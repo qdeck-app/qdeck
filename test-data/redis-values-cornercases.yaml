@@ -1,0 +1,523 @@
+# ============================================================================
+# Bitnami Redis — exhaustive corner-case values.yaml
+#
+# Every top-level section exercises a different YAML feature so a UI that
+# claims to preserve comments, anchors, aliases, merges, and unusual scalars
+# has something real to break against. Keys under the `cornerCases` tree
+# aren't consumed by the chart — they're there purely to stress the editor.
+#
+# Load this into qdeck against any version of the bitnami/redis chart.
+# ============================================================================
+
+# -----------------------------------------------------------------
+# Shared building blocks. Not read by helm, but referenced below via
+# aliases and merge keys. Keeping them at the top keeps the anchor
+# definition strictly before every use, which matches YAML spec and
+# avoids forward-reference ambiguity some parsers dislike.
+# -----------------------------------------------------------------
+
+x-defaults: &defaults
+  enabled: true
+  # Resource baseline — overridden per-workload further down via merges.
+  resources: &defaultResources
+    requests:
+      cpu: 100m        # inline: cores, millicore suffix
+      memory: 128Mi    # inline: binary-prefix Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+x-pod-security: &podSecurity
+  # Bitnami non-root defaults. Hardened, not exhaustive.
+  runAsNonRoot: true
+  runAsUser: 1001
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+x-container-security: &containerSecurity
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+x-linux-amd64: &linuxAmd64
+  kubernetes.io/os: linux
+  kubernetes.io/arch: amd64
+
+# -----------------------------------------------------------------
+# Global settings
+# -----------------------------------------------------------------
+global:
+  # Empty string is intentional — bitnami treats "" as "use upstream".
+  imageRegistry: ""
+  imagePullSecrets: []            # flow-style empty sequence
+  storageClass: "standard-rwo"    # quoted: hyphenated tokens read cleaner quoted
+  redis:
+    # Password reused via alias below. Contains a '#' inside the quoted
+    # literal so the parser must not treat it as a comment.
+    password: &sharedPassword "s3cr3t # not really a comment"
+
+architecture: replication         # standalone | replication
+
+auth:
+  enabled: true
+  sentinel: true
+  existingSecret: ""
+  existingSecretPasswordKey: ""
+  password: *sharedPassword       # alias to the anchor above
+  usePasswordFiles: ~             # explicit null via tilde
+  # Empty map: valid, distinguishable from absence.
+  extraPolicies: {}
+
+# -----------------------------------------------------------------
+# Common metadata — real chart keys have dots in them, which flat-key
+# flatteners tend to mishandle. That's the point.
+# -----------------------------------------------------------------
+commonLabels:
+  app.kubernetes.io/part-of: "platform"
+  costcenter/team: "platform-eng"
+  "with spaces": "values can have spaces too"
+
+commonAnnotations:
+  # Multi-line literal block; keeps newlines as-is.
+  kubernetes.io/change-cause: |-
+    redis: bump to 7.2
+    rolled out 2026-04-24 by ops
+  # Folded block — collapses newlines into spaces on decode.
+  meta.helm.sh/release-notes: >-
+    Folded-style so it all ends up on a single line
+    once helm renders it.
+
+# -----------------------------------------------------------------
+# Image
+# -----------------------------------------------------------------
+image:
+  registry: docker.io
+  repository: bitnami/redis
+  tag: 7.2.5-debian-12-r2
+  digest: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+  debug: false                    # inline: keep debug off in prod
+
+# -----------------------------------------------------------------
+# Master pod
+# -----------------------------------------------------------------
+master:
+  <<: *defaults                   # merge key pulls in `enabled` and `resources`
+  count: 1
+  # Block literal: preserves every newline and comment inside exactly.
+  configuration: |
+    # Pasted verbatim from redis.conf.
+    maxmemory-policy allkeys-lru
+    # Comment inside a block scalar is part of the string, not YAML.
+    appendonly yes
+    save ""
+
+  disableCommands:
+    - FLUSHDB
+    - FLUSHALL
+    - CONFIG                      # inline after sequence item
+    # - DEBUG                     # commented-out example inside a sequence
+
+  extraFlags:
+    - --loglevel
+    - verbose
+
+  command: []
+  args: []
+  preExecCmds: []
+
+  extraEnvVars:
+    - name: REDIS_CLIENT_TIMEOUT
+      value: "30"                 # forced string so helm won't coerce
+    - name: REDIS_MAX_MEMORY_SAMPLES
+      value: "5"
+    - name: REDIS_POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.namespace
+
+  podSecurityContext:
+    <<: *podSecurity
+    enabled: true                 # explicit key alongside the merge
+  containerSecurityContext:
+    <<: *containerSecurity
+    enabled: true
+
+  persistence:
+    enabled: true
+    storageClass: ""              # inherit from global
+    accessModes: ["ReadWriteOnce"]
+    size: 8Gi
+    annotations: {}               # flow-style empty map
+    path: /data                   # inline: container mount point
+
+  # Plain alias (no merge): reuses the whole resources block as-is.
+  resources: *defaultResources
+
+  nodeSelector: *linuxAmd64
+
+  tolerations:
+    - key: "workload-type"
+      operator: "Equal"
+      value: "cache"
+      effect: "NoSchedule"
+    - key: "node.kubernetes.io/unreachable"
+      operator: "Exists"
+      effect: "NoExecute"
+      tolerationSeconds: 300
+
+# -----------------------------------------------------------------
+# Replica pool
+# -----------------------------------------------------------------
+replica:
+  <<: *defaults
+  replicaCount: 3
+  configuration: ""
+  disableCommands: []
+  # "No" intentionally as a string — YAML 1.1 would have parsed bare No as a bool.
+  autoFailover: "No"
+  priorityClassName: ""
+  schedulerName: ""
+  # Integer larger than 2^53 — survives as an int in YAML but loses precision if
+  # round-tripped through a JSON parser that uses float64.
+  externalAccessTimeoutMs: 9007199254740993
+
+  persistence:
+    <<: *defaults                 # merges `enabled: true` AND resources
+    resources:                    # explicit key wins over the merged resources
+      requests:
+        storage: 20Gi
+    accessModes:
+      - ReadWriteOnce
+    size: 8Gi
+
+  resources:
+    <<: *defaultResources
+    # Replica bumps memory past the anchored default.
+    limits:
+      memory: 1Gi
+
+  podSecurityContext: *podSecurity
+  containerSecurityContext: *containerSecurity
+  nodeSelector: *linuxAmd64
+
+  autoscaling:
+    enabled: false
+    minReplicas: 3
+    maxReplicas: 11
+    targetCPU: 75                 # percent, no unit on purpose
+    targetMemory: 80
+
+# -----------------------------------------------------------------
+# Sentinel
+# -----------------------------------------------------------------
+sentinel:
+  enabled: false
+  image:
+    registry: docker.io
+    repository: bitnami/redis-sentinel
+    tag: 7.2.5-debian-12-r2
+  masterSet: mymaster
+  quorum: 2
+  downAfterMilliseconds: 60000
+  failoverTimeout: 180000
+  parallelSyncs: 1
+  configuration: ""
+  tls:
+    enabled: false
+    existingSecret: ""
+    authClients: true
+    autoGenerated: false
+    certificatesSecret: ""
+    certFilename: ""
+    certKeyFilename: ""
+    certCAFilename: ""
+    dhParamsFilename: ""
+
+# -----------------------------------------------------------------
+# Policies & accounts
+# -----------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  allowExternal: true
+  extraIngress:
+    - ports:
+        - port: 6379
+          protocol: TCP
+      from:
+        - namespaceSelector:
+            matchLabels:
+              name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+
+serviceAccount:
+  create: true
+  name: ""
+  automountServiceAccountToken: false
+  annotations: {}
+
+# -----------------------------------------------------------------
+# Metrics (exporter sidecar)
+# -----------------------------------------------------------------
+metrics:
+  <<: *defaults                   # pulls in enabled + resources
+  image:
+    registry: docker.io
+    repository: bitnami/redis-exporter
+    tag: 1.61.0-debian-12-r0
+  redisTargetHost: localhost
+  extraArgs: {}
+  extraEnvVars: []
+  podLabels:
+    app.kubernetes.io/component: metrics
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+  resources: *defaultResources
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: ""
+    scrapeTimeout: ""
+    labels: {}
+    additionalLabels: {}
+
+# ============================================================================
+# Corner-case playground — not consumed by helm. Every sub-section targets a
+# specific YAML feature or a scalar that has historically confused parsers.
+# ============================================================================
+cornerCases:
+
+  # -------------------------------------------------------------
+  # Numeric variants. .inf / .nan / octal / hex forms are kept as
+  # strings here because helm's YAML→JSON path rejects Inf/NaN and
+  # strips non-decimal integer forms on the way through.
+  # -------------------------------------------------------------
+  numbers:
+    zero: 0
+    negativeZero: -0
+    plainInt: 42
+    negativeInt: -17
+    bigInt: 9223372036854775807    # i64 max — precision lost if routed through float64
+    floatDot: 3.14159
+    floatNoLeading: 0.5
+    floatNoTrailing: 7.0
+    scientific: 6.022e23
+    negativeScientific: -1.6e-19
+    infinityAsString: ".inf"
+    negativeInfinityAsString: "-.inf"
+    notANumberAsString: ".nan"
+    octalAsString: "0o755"         # YAML 1.2 octal prefix, kept as string
+    hexAsString: "0xFF"
+
+  # -------------------------------------------------------------
+  # Values that look like booleans or nulls but are strings
+  # -------------------------------------------------------------
+  booleansish:
+    trueBool: true
+    falseBool: false
+    yesString: "yes"               # forced string: YAML 1.1 would coerce to bool
+    noString: "no"
+    onString: "on"
+    offString: "off"
+    trueString: "true"
+    emptyString: ""
+    plainNull: null
+    tildeNull: ~
+    taggedNull: !!null ""
+    taggedBool: !!bool "true"
+    taggedInt: !!int "42"
+    taggedStr: !!str "42"          # force string form for a digit-only value
+
+  # -------------------------------------------------------------
+  # Strings that need quoting
+  # -------------------------------------------------------------
+  strings:
+    withHash: "value with # not a comment"
+    withColon: "key:value but one string"
+    startsWithDash: "- looks like a sequence"
+    startsWithAt: "@at-sign"
+    startsWithStar: "*literal-star-not-alias"
+    yamlReserved: "---"            # three-dash document separator as a literal
+    unicodeMix: "Привет 世界 👋🏽"
+    emojiOnly: "🎉🚀✨"
+    trailingSpace: "two spaces  "
+    controlChar: "tab\there"       # escape sequence inside double quotes
+    hashAndNewlines: "prefix\n# looks like a comment\nsuffix"
+
+    multilineLiteral: |
+      line 1
+      line 2
+        indented 2 spaces
+      final line
+
+    multilineFolded: >
+      this folds
+      onto one line
+      with spaces between words.
+
+    multilineKeep: |+
+      keep trailing
+
+      blank lines
+
+    multilineStrip: |-
+      strip trailing
+
+    jsonInside: |
+      {
+        "nested": {"json": true, "n": 42},
+        "list": [1, 2, 3]
+      }
+
+    # Base64-decoded to a tiny GIF. Round-trips via !!binary tag.
+    binaryBlob: !!binary |
+      R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5
+      OTk6enp56enmleECcgggoBADs=
+
+  # -------------------------------------------------------------
+  # Sequences with varied item shapes
+  # -------------------------------------------------------------
+  sequences:
+    flowEmpty: []
+    flowSingle: [only]
+    flowMany: [1, 2, 3, "mixed", true, null]
+    flowNested: [[1, 2], [3, 4], [5, 6]]
+    blockOfMaps:
+      - name: alpha
+        port: 6379
+        tls: false
+      - name: beta
+        port: 6380
+        tls: true
+        weight: !!int "3"          # tagged scalar inside a map
+      - name: gamma
+        # Merge key inside a sequence item — pulls in requests/limits.
+        <<: *defaultResources
+    sparseIndices:
+      - first
+      - null                       # explicit hole in the middle
+      - third
+    mixedScalarAndMap:
+      - "plain scalar first"
+      - key: "then a map"
+        nested:
+          depth: 2
+
+  # -------------------------------------------------------------
+  # Unusual keys
+  # -------------------------------------------------------------
+  quotedKeys:
+    "quoted/key with spaces": 1
+    "123numeric-start": "key starting with a digit"
+    "nested/slash/key": true
+    "": "empty key"                # empty-string key — valid but unusual
+
+  # -------------------------------------------------------------
+  # Deep nesting — exercises chevron collapse and indent guides
+  # -------------------------------------------------------------
+  deep:
+    level1:
+      level2:
+        level3:
+          level4:
+            level5:
+              level6:
+                leaf: "we made it"
+                sibling: "same depth"
+
+  # -------------------------------------------------------------
+  # Anchor/alias round-trip variants
+  # -------------------------------------------------------------
+  anchorsAndAliases:
+    # Simple scalar anchor reused twice.
+    hostBase: &hostBase "redis.svc.cluster.local"
+    primaryHost: *hostBase
+    replicaHost: *hostBase
+
+    # Mapping anchor, reused identically.
+    shapePalette: &palette
+      color: red
+      shape: circle
+    alias1: *palette
+    alias2: *palette
+
+    # Mapping anchor, reused and then overridden via merge.
+    baseTimeouts: &timeouts
+      read: 5s
+      write: 10s
+      idle: 60s
+    aggressiveTimeouts:
+      <<: *timeouts
+      read: 1s                     # override inside the merged map
+
+    # Sequence anchor reused.
+    allowedMethods: &methods
+      - GET
+      - POST
+      - DELETE
+    readOnlyMethods: *methods
+
+    # Nested anchor inside a list item, reused at top level.
+    services:
+      - &primaryService
+        name: primary
+        port: 6379
+      - name: secondary
+        port: 6380
+    primaryService: *primaryService
+
+  # -------------------------------------------------------------
+  # Multiple merge keys — YAML allows `<<` to reference a sequence
+  # of mappings, merged left-to-right.
+  # -------------------------------------------------------------
+  multiMerge:
+    base: &base
+      cpu: 100m
+      memory: 128Mi
+    tracingOverrides: &tracing
+      memory: 256Mi
+      extraEnv:
+        - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
+    combined:
+      <<: [*base, *tracing]        # merge sequence
+      cpu: 250m                    # explicit win over both merges
+
+  # -------------------------------------------------------------
+  # Tag variants on collections
+  # -------------------------------------------------------------
+  taggedCollections:
+    explicitMap: !!map
+      foo: 1
+      bar: 2
+    explicitSeq: !!seq
+      - a
+      - b
+    explicitSet: !!set
+      ? red
+      ? green
+      ? blue
+
+# ============================================================================
+# Standalone wall of head comments — testing multi-line preservation on a
+# leaf value. Everything below this fence is a normal diagnostic toggle.
+# ============================================================================
+
+# Diagnostic mode
+# ---------------
+# Keep these OFF in production. Enabling wires a port-forward and may
+# leak cluster internals to whatever host runs helm. Three-line head
+# comment so the editor's round-trip of \n-separated comment blocks
+# has something to exercise.
+diagnosticMode:
+  enabled: false                   # inline: keep false
+  command:
+    - sleep
+  args:
+    - infinity

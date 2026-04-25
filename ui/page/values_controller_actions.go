@@ -499,6 +499,30 @@ func (vc *ValuesController) onCollapseChanged() {
 	})
 }
 
+// ensureBlankCustomValues initializes col.CustomValues with an empty mapping
+// when entirely missing, so anchor/alias mutations work on a freshly-created
+// column whose file has not been loaded or saved yet. The tree is materialized
+// lazily here rather than at column creation so columns that stay empty don't
+// get marked as synthetic values.
+//
+// Returns false when CustomValues already exists but NodeTree is nil — i.e.
+// entries loaded successfully but yaml.Unmarshal failed on the raw bytes.
+// Overwriting with a fresh empty mapping in that state would silently drop
+// every loaded entry on the next save, so the caller must surface an error
+// instead. Truly-empty columns return true.
+func ensureBlankCustomValues(col *state.CustomColumnState) bool {
+	if col.CustomValues == nil {
+		col.CustomValues = &service.FlatValues{
+			NodeTree: &yaml.Node{Kind: yaml.MappingNode},
+			Indent:   service.DefaultYAMLIndent,
+		}
+
+		return true
+	}
+
+	return col.CustomValues.NodeTree != nil
+}
+
 // onAnchorCreate declares a YAML anchor on the cell at flatKey in column
 // colIdx. Mutates the column's NodeTree directly so the next save preserves
 // the anchor. Refreshes the Anchors map so the badge updates, and marks the
@@ -509,8 +533,8 @@ func (vc *ValuesController) onAnchorCreate(colIdx int, flatKey, anchorName strin
 	}
 
 	col := &vc.State.Columns[colIdx]
-	if col.CustomValues == nil || col.CustomValues.NodeTree == nil {
-		vc.NotifState.Show("Load or save a file before declaring an anchor.", state.NotificationError, time.Now())
+	if !ensureBlankCustomValues(col) {
+		vc.NotifState.Show("Cannot declare anchor: column YAML failed to parse.", state.NotificationError, time.Now())
 
 		return
 	}
@@ -551,8 +575,8 @@ func (vc *ValuesController) onAnchorAlias(colIdx int, flatKey, anchorName string
 	}
 
 	col := &vc.State.Columns[colIdx]
-	if col.CustomValues == nil || col.CustomValues.NodeTree == nil {
-		vc.NotifState.Show("Load or save a file before aliasing.", state.NotificationError, time.Now())
+	if !ensureBlankCustomValues(col) {
+		vc.NotifState.Show("Cannot create alias: column YAML failed to parse.", state.NotificationError, time.Now())
 
 		return
 	}

@@ -302,7 +302,12 @@ func (p *ReposPage) layoutRecentValuesEntries(gtx layout.Context) layout.Dimensi
 					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-								layout.Rigid(customwidget.LabelWidget(material.Body2(p.Theme, filepath.Base(entry.ValuesPath)))),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+									lbl := material.Body2(p.Theme, entry.ValuesPath)
+									lbl.MaxLines = 1
+
+									return customwidget.LayoutLabel(gtx, lbl)
+								}),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									lbl := material.Caption(p.Theme, entry.ChartDisplayName)
 									lbl.Color = theme.ColorSecondary

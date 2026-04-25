@@ -44,21 +44,29 @@ func DetectYAMLIndent(data []byte) int {
 }
 
 // OverrideEntry holds a single flat key-value pair for YAML reconstruction.
+// HeadComment is the cleaned comment block (no "# " prefix, lines joined by
+// "\n") the user typed above the value. LineComment is the cleaned trailing
+// inline comment on the same line as the value, e.g. "port: 8085 # default"
+// → LineComment = "default". Both are empty when absent.
 type OverrideEntry struct {
-	Key   string
-	Value string
-	Type  string
+	Key         string
+	Value       string
+	Type        string
+	HeadComment string
+	LineComment string
 }
 
-// FlatEntriesToYAML reconstructs nested YAML from flat dot-separated key-value pairs.
-// indent controls the number of spaces per nesting level in the output.
-// Returns empty string when entries is empty.
+// FlatEntriesToYAML reconstructs nested YAML from flat dot-separated key-value
+// pairs. indent controls the number of spaces per nesting level in the output.
+// Returns empty string when entries is empty. Builds a yaml.Node tree via
+// upsertPath so head/line comments from each OverrideEntry can be attached to
+// the appropriate key/value nodes before marshalling.
 func FlatEntriesToYAML(entries []OverrideEntry, indent int) (string, error) {
 	if len(entries) == 0 {
 		return "", nil
 	}
 
-	root := make(map[string]any)
+	root := &yaml.Node{Kind: yaml.MappingNode}
 
 	for _, e := range entries {
 		segments, err := parseKeySegments(e.Key)
@@ -70,11 +78,11 @@ func FlatEntriesToYAML(entries []OverrideEntry, indent int) (string, error) {
 			continue
 		}
 
-		val := convertValue(e.Value, e.Type)
-
-		if err := setNestedValue(root, segments, val); err != nil {
+		if err := upsertPath(root, segments, convertValue(e.Value, e.Type)); err != nil {
 			return "", fmt.Errorf("set key %q: %w", e.Key, err)
 		}
+
+		applyOverrideComments(root, segments, e.HeadComment, e.LineComment)
 	}
 
 	var buf bytes.Buffer
@@ -233,12 +241,24 @@ func PatchNodeTree(root *yaml.Node, entries []OverrideEntry, indent int) (string
 			continue
 		}
 
-		if effective, ok := findEffectiveScalar(workingTree, segments); ok && effective == e.Value {
+		effective, hasValue := findEffectiveScalar(workingTree, segments)
+		valueUnchanged := hasValue && effective == e.Value
+
+		effHead, effLine := effectiveComments(workingTree, segments)
+		commentsUnchanged := overrideCommentsMatch(e.HeadComment, e.LineComment, effHead, effLine)
+
+		if valueUnchanged && commentsUnchanged {
 			continue
 		}
 
-		if err := upsertPath(workingTree, segments, convertValue(e.Value, e.Type)); err != nil {
-			return "", fmt.Errorf("upsert key %q: %w", e.Key, err)
+		if !valueUnchanged {
+			if err := upsertPath(workingTree, segments, convertValue(e.Value, e.Type)); err != nil {
+				return "", fmt.Errorf("upsert key %q: %w", e.Key, err)
+			}
+		}
+
+		if !commentsUnchanged {
+			applyOverrideComments(workingTree, segments, e.HeadComment, e.LineComment)
 		}
 	}
 
@@ -316,4 +336,121 @@ func findEffectiveScalar(root *yaml.Node, segments []keySegment) (string, bool) 
 	}
 
 	return current.Value, true
+}
+
+// effectiveComments returns the cleaned (head, line) comment pair associated
+// with the leaf at segments. head is the best head comment from key-then-val,
+// line is the best line comment from val-then-key. Callers use these together
+// to decide whether an OverrideEntry's explicit HeadComment/LineComment truly
+// differ from what the file already encodes — unchanged comments are skipped
+// so the original inline vs. head-block style survives an unrelated save.
+func effectiveComments(root *yaml.Node, segments []keySegment) (string, string) {
+	parent, slot, err := findParentSlot(root, segments)
+	if err != nil {
+		return "", ""
+	}
+
+	switch parent.Kind {
+	case yaml.MappingNode:
+		keyNode := parent.Content[slot-1]
+		valNode := parent.Content[slot]
+
+		head := bestHeadComment(keyNode.HeadComment, valNode.HeadComment)
+		line := bestLineComment(valNode.LineComment, keyNode.LineComment)
+
+		return head, line
+	case yaml.SequenceNode:
+		child := parent.Content[slot]
+
+		return bestHeadComment(child.HeadComment), bestLineComment(child.LineComment)
+	default:
+		return "", ""
+	}
+}
+
+// overrideCommentsMatch reports whether the user's explicit HeadComment and
+// LineComment from the editor equal what the tree already encodes. Loading
+// collapses an inline LineComment into the editor's leading-head-comment
+// area (formatCommentForEditor), so a user-unchanged head can also match the
+// tree's line comment and vice-versa. Only treated as a match when the user
+// typed a single comment and the tree holds exactly one source.
+func overrideCommentsMatch(entryHead, entryLine, effHead, effLine string) bool {
+	if entryLine != "" {
+		return entryHead == effHead && entryLine == effLine
+	}
+
+	if entryHead == "" {
+		return effHead == "" && effLine == ""
+	}
+
+	return entryHead == effHead || entryHead == effLine
+}
+
+// applyOverrideComments normalizes comment placement on the leaf at segments:
+// clears any existing head/line/foot comments on the key and value nodes,
+// then writes the user's head block as HeadComment on the key (or the item
+// node in a sequence) and the user's inline comment as LineComment on the
+// value node. Empty strings leave the slot cleared. The "# " prefix is added
+// here because yaml.v3 emits HeadComment and LineComment verbatim.
+func applyOverrideComments(root *yaml.Node, segments []keySegment, head, line string) {
+	parent, slot, err := findParentSlot(root, segments)
+	if err != nil {
+		return
+	}
+
+	var (
+		headTarget *yaml.Node
+		lineTarget *yaml.Node
+	)
+
+	switch parent.Kind {
+	case yaml.MappingNode:
+		keyNode := parent.Content[slot-1]
+		valNode := parent.Content[slot]
+
+		keyNode.HeadComment = ""
+		keyNode.LineComment = ""
+		keyNode.FootComment = ""
+		valNode.HeadComment = ""
+		valNode.LineComment = ""
+		valNode.FootComment = ""
+
+		headTarget = keyNode
+		lineTarget = valNode
+	case yaml.SequenceNode:
+		item := parent.Content[slot]
+		item.HeadComment = ""
+		item.LineComment = ""
+		item.FootComment = ""
+
+		headTarget = item
+		lineTarget = item
+	default:
+		return
+	}
+
+	if head != "" {
+		headTarget.HeadComment = formatHeadComment(head)
+	}
+
+	if line != "" {
+		lineTarget.LineComment = "# " + line
+	}
+}
+
+// formatHeadComment prefixes each line of a multi-line head comment with
+// "# ", producing the verbatim form yaml.v3 emits above the node.
+func formatHeadComment(comment string) string {
+	var b strings.Builder
+
+	for i, line := range strings.Split(comment, "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+
+		b.WriteString("# ")
+		b.WriteString(line)
+	}
+
+	return b.String()
 }

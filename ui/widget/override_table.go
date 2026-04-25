@@ -33,7 +33,6 @@ const (
 	overridePaddingV       unit.Dp = 4
 	overridePaddingH       unit.Dp = 8
 	overrideIndentPerLevel unit.Dp = 12
-	overrideStickyPaddingV unit.Dp = 6
 	overrideScrollbarWidth unit.Dp = 10 // MinorWidth(6) + 2*MinorPadding(2)
 	overrideSeparatorH     unit.Dp = 1
 	overrideTreeGuideW     unit.Dp = 1
@@ -87,6 +86,11 @@ type OverrideTable struct {
 
 	// ShowComments controls whether comment lines above default value entries are displayed.
 	ShowComments bool
+
+	// SearchQuery is the current search text. When non-empty, key-column
+	// labels paint a yellow highlight behind the first case-insensitive match.
+	// Set by the page before Layout each frame.
+	SearchQuery string
 
 	hovers             []gesture.Hover
 	cellClicks         []gesture.Click
@@ -322,21 +326,18 @@ func (t *OverrideTable) Layout(
 	tablePass := pointer.PassOp{}.Push(gtx.Ops)
 	defer tablePass.Pop()
 
-	parent := t.stickyParent(entries, filteredIndices)
-
+	// Scrollbar markers overlay the whole table because they're rendered
+	// against the scrollbar column regardless of list content position. The
+	// list itself takes the full table area — the parent-path indicator that
+	// used to live as a sticky header inside the table now lives in the page
+	// header above (see ValuesPage.layoutStickyParent), so scrolling never
+	// triggers a layout change in the list and stays perfectly smooth.
 	return layout.Stack{}.Layout(gtx,
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
 			return material.List(t.Theme, t.List).Layout(gtx, len(filteredIndices),
 				func(gtx layout.Context, index int) layout.Dimensions {
 					return t.layoutRow(gtx, entries, filteredIndices, index)
 				})
-		}),
-		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-			if parent == "" {
-				return layout.Dimensions{}
-			}
-
-			return t.layoutStickyHeader(gtx, parent)
 		}),
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			t.layoutScrollbarMarkers(gtx, entries, filteredIndices)
@@ -395,8 +396,17 @@ func (t *OverrideTable) layoutRow(
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			// Comment above entry (optional), constrained to left panel width.
+			// Section rows always show their comment because it's usually
+			// structural documentation ("Master pod", "Global settings")
+			// that's valuable context even when leaf-level comments are
+			// toggled off to reduce noise. Only leaf comments defer to
+			// ShowComments.
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if entry.Comment == "" || !t.ShowComments {
+				if entry.Comment == "" {
+					return layout.Dimensions{}
+				}
+
+				if !section && !t.ShowComments {
 					return layout.Dimensions{}
 				}
 
@@ -439,7 +449,7 @@ func (t *OverrideTable) layoutRow(
 													return t.layoutChevronSlot(gtx, index, entry.Key, section)
 												}),
 												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-													return LayoutLabel(gtx, lbl)
+													return LayoutHighlightedLabel(gtx, lbl, t.SearchQuery)
 												}),
 											)
 										})
@@ -476,7 +486,10 @@ func (t *OverrideTable) layoutRow(
 						gtx.Constraints.Max.X = rightW
 
 						if section {
-							return layout.Dimensions{Size: image.Pt(rightW, 0)}
+							// Section rows have no editor cells, but when a custom file
+							// attaches an anchor or alias to the section key itself (e.g.
+							// `master: &masterConfig`) the badge still needs to be visible.
+							return t.layoutSectionBadges(gtx, index, entry.Key, g, rightW)
 						}
 
 						return t.layoutRightColumns(gtx, index, entryIdx, entry.Key, g, entry.Type)
@@ -619,6 +632,61 @@ func (t *OverrideTable) layoutRightColumns(
 		n++
 
 		// Sub-divider between columns (not after the last).
+		if c < g.count-1 {
+			children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Dimensions{Size: image.Pt(g.subDivW, 0)}
+			})
+			n++
+		}
+	}
+
+	return layout.Flex{}.Layout(gtx, children[:n]...)
+}
+
+// layoutSectionBadges renders just the anchor/alias badge for each active
+// override column on a section row. Section rows have no editor cells, so
+// the badge sits where the editor would be, aligned to the right edge of
+// each column so it lines up with regular-row badges below.
+func (t *OverrideTable) layoutSectionBadges(
+	gtx layout.Context,
+	rowIndex int,
+	entryKey string,
+	g colGeometry,
+	rightW int,
+) layout.Dimensions {
+	var children [state.MaxCustomColumns * 2]layout.FlexChild
+
+	n := 0
+
+	for c := range g.count {
+		col := c
+
+		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			_, w := g.columnBounds(col, rightW)
+
+			gtx.Constraints.Min.X = w
+			gtx.Constraints.Max.X = w
+
+			badgeInfo := t.columnAnchorInfo(col, entryKey)
+			colAnchors := t.columnAnchors(col)
+
+			return layout.Inset{Left: overridePaddingH}.Layout(gtx,
+				func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return layout.Dimensions{}
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return t.layoutAnchorBadge(
+								gtx, badgeInfo, colAnchors,
+								&t.columnBadgeClicks[col][rowIndex], col, entryKey,
+							)
+						}),
+					)
+				})
+		})
+		n++
+
 		if c < g.count-1 {
 			children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Dimensions{Size: image.Pt(g.subDivW, 0)}
@@ -803,8 +871,12 @@ func (t *OverrideTable) gitChangeStatus(key string) domain.GitChangeStatus {
 	return best
 }
 
-// stickyParent returns the parent key path for the first visible entry.
-func (t *OverrideTable) stickyParent(entries []service.FlatValueEntry, filteredIndices []int) string {
+// CurrentParent returns the parent key path of the first row currently visible
+// in the list, or "" when no nested row is visible. The page header above the
+// table reads this each frame to render a fixed-position context strip — the
+// same information the previous in-list sticky header used to convey, but
+// without ever resizing the list.
+func (t *OverrideTable) CurrentParent(entries []service.FlatValueEntry, filteredIndices []int) string {
 	first := t.List.Position.First
 	if first < 0 || first >= len(filteredIndices) {
 		return ""
@@ -816,37 +888,6 @@ func (t *OverrideTable) stickyParent(entries []service.FlatValueEntry, filteredI
 	}
 
 	return parentPath(entries[entryIdx].Key)
-}
-
-func (t *OverrideTable) layoutStickyHeader(gtx layout.Context, parent string) layout.Dimensions {
-	// Leave space on the right for the scrollbar so the header does not overlap it.
-	scrollW := gtx.Dp(overrideScrollbarWidth)
-	headerW := max(gtx.Constraints.Max.X-scrollW, 0)
-
-	return layout.Stack{}.Layout(gtx,
-		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-			rect := clip.Rect{Max: image.Pt(headerW, gtx.Constraints.Min.Y)}.Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorStickyHeader}.Add(gtx.Ops)
-			paint.PaintOp{}.Add(gtx.Ops)
-			rect.Pop()
-
-			return layout.Dimensions{Size: image.Pt(headerW, gtx.Constraints.Min.Y)}
-		}),
-		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-			gtx.Constraints.Max.X = headerW
-
-			return layout.Inset{
-				Top: overrideStickyPaddingV, Bottom: overrideStickyPaddingV,
-				Left: overridePaddingH, Right: overridePaddingH,
-			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Body2(t.Theme, parent)
-				lbl.Color = theme.ColorSecondary
-				lbl.MaxLines = 1
-
-				return LayoutLabel(gtx, lbl)
-			})
-		}),
-	)
 }
 
 // indentGuide describes one vertical guide line: its indent level and

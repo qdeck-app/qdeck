@@ -315,6 +315,12 @@ func (s *ValuesPageState) FocusedEntryKey() string {
 // renders empty; their Type, Depth, and Comment are preserved. A custom-only
 // map or list entry stays a section header (IsSection == true) because Type is
 // "map"/"list" and Value is "".
+//
+// When a key exists in both defaults and a custom column, the defaults-side
+// Comment is upgraded to the custom file's Comment when the custom one is
+// non-empty. Users annotate keys in their overrides file specifically to
+// document their own intent; dropping that annotation just because the chart
+// happens to declare the same key is surprising.
 func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry, changed bool) {
 	prev = s.Entries
 
@@ -348,10 +354,11 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 		defaultKeys[defaults[i].Key] = struct{}{}
 	}
 
-	// Walk active columns in order; first occurrence of a custom-only key wins
-	// (Type/Comment come from that column). Stable across columns: subsequent
-	// columns don't overwrite an already-seen key.
+	// Collect both: custom-only entries (keys absent from defaults) and
+	// overlap-key comments (keys in defaults that the custom file annotates).
+	// First occurrence across columns wins for both.
 	customOnly := make(map[string]service.FlatValueEntry)
+	customComments := make(map[string]string)
 
 	for c := range s.ColumnCount {
 		cv := s.Columns[c].CustomValues
@@ -361,6 +368,12 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 
 		for _, e := range cv.Entries {
 			if _, isDefault := defaultKeys[e.Key]; isDefault {
+				if e.Comment != "" {
+					if _, seen := customComments[e.Key]; !seen {
+						customComments[e.Key] = e.Comment
+					}
+				}
+
 				continue
 			}
 
@@ -378,13 +391,16 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 	}
 
 	// Second fast path: custom files only override keys that already exist in
-	// defaults, so the unified list equals defaults. Skip the merge+sort.
+	// defaults, so the unified list equals defaults. Skip the merge+sort but
+	// still apply custom-side comment upgrades to the cloned entries.
 	if len(customOnly) == 0 {
-		if entriesEqual(prev, defaults) {
+		withComments := applyCustomComments(defaults, customComments)
+
+		if entriesEqual(prev, withComments) {
 			return prev, false
 		}
 
-		s.Entries = slices.Clone(defaults)
+		s.Entries = withComments
 
 		return prev, true
 	}
@@ -400,6 +416,12 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 		return strings.Compare(a.Key, b.Key)
 	})
 
+	for i := range merged {
+		if c, ok := customComments[merged[i].Key]; ok {
+			merged[i].Comment = c
+		}
+	}
+
 	if entriesEqual(prev, merged) {
 		return prev, false
 	}
@@ -407,6 +429,26 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 	s.Entries = merged
 
 	return prev, true
+}
+
+// applyCustomComments returns a copy of defaults with Comment replaced by any
+// non-empty custom-side annotation for the same key. When customComments is
+// empty, the clone is still returned — callers compare by value, so identity
+// isn't load-bearing.
+func applyCustomComments(defaults []service.FlatValueEntry, customComments map[string]string) []service.FlatValueEntry {
+	out := slices.Clone(defaults)
+
+	if len(customComments) == 0 {
+		return out
+	}
+
+	for i := range out {
+		if c, ok := customComments[out[i].Key]; ok {
+			out[i].Comment = c
+		}
+	}
+
+	return out
 }
 
 // anyColumnHasCustomValues reports whether any active column has loaded

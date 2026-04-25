@@ -577,6 +577,7 @@ func (vc *ValuesController) ResetState() {
 	vc.State.CollapsedKeys = nil
 	vc.State.CollapsedPreSearch = nil
 	vc.State.SearchCollapseActive = false
+	vc.State.SearchEditor.SetText("")
 
 	for i := range vc.State.DefaultValueEditors {
 		vc.State.DefaultValueEditors[i].SetText("")

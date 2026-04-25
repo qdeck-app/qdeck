@@ -160,6 +160,52 @@ func (p *ValuesPage) layoutColumnHeaders(gtx layout.Context) layout.Dimensions {
 	return dims
 }
 
+// layoutStickyParent renders the fixed-height strip below the column headers
+// that surfaces the parent key path of the first visible row. Replacing the
+// previous in-list sticky header with this page-header strip keeps the table
+// list at a constant size regardless of scroll position, so scrolling can
+// never trigger a layout shift in the table body.
+func (p *ValuesPage) layoutStickyParent(gtx layout.Context) layout.Dimensions {
+	parent := p.Table.CurrentParent(p.State.Entries, p.State.FilteredIndices)
+
+	viewportW := gtx.Constraints.Max.X
+	stripH := gtx.Dp(stickyParentStripH)
+
+	bg := clip.Rect{Max: image.Pt(viewportW, stripH)}.Push(gtx.Ops)
+	paint.ColorOp{Color: theme.ColorStickyHeader}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	bg.Pop()
+
+	if parent != "" {
+		labelGtx := gtx
+		labelGtx.Constraints.Min.Y = 0
+		labelGtx.Constraints.Max.Y = stripH
+
+		layout.Inset{
+			Top: stickyParentStripPadV, Bottom: stickyParentStripPadV,
+			Left: valuesSpacing, Right: valuesSpacing,
+		}.Layout(labelGtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Body2(p.Theme, parent)
+			lbl.Color = theme.ColorSecondary
+			lbl.MaxLines = 1
+
+			return customwidget.LayoutLabel(gtx, lbl)
+		})
+	}
+
+	sepH := gtx.Dp(valuesSeparatorHeight)
+
+	sep := clip.Rect{
+		Min: image.Pt(0, stripH-sepH),
+		Max: image.Pt(viewportW, stripH),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	sep.Pop()
+
+	return layout.Dimensions{Size: image.Pt(viewportW, stripH)}
+}
+
 // layoutColumnFileStatuses renders per-column file statuses (no trailing buttons).
 // Each column gets equal Flexed(1) weight with sub-divider spacers between them.
 func (p *ValuesPage) layoutColumnFileStatuses(gtx layout.Context) layout.Dimensions {
