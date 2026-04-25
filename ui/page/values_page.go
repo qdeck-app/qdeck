@@ -5,6 +5,7 @@ import (
 
 	"gioui.org/io/key"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
@@ -59,6 +60,14 @@ const (
 	dropZoneCompactThreshold unit.Dp = 250
 	headerSubDividerW        unit.Dp = 1 // matches overrideSubDividerW in overridetable.go
 
+	// stickyParentStripH is the fixed height of the parent-path strip that
+	// sits between the column headers and the table. It shows the parent
+	// key path of the first visible row — the same context the previous
+	// in-list sticky header used to convey, but rendered in the page
+	// header area so scrolling never resizes the list.
+	stickyParentStripH    unit.Dp = 24
+	stickyParentStripPadV unit.Dp = 4
+
 	recentItemPadV       unit.Dp = 2
 	showCommentsSize     unit.Dp = 18
 	showCommentsTextMult float32 = 0.85
@@ -71,6 +80,14 @@ const (
 	// scrollContextRows is how many rows of context to show above a
 	// scrolled-into-view target row (cell navigation, restored focus).
 	scrollContextRows = 2
+
+	// focusHighlightMaxAttempts caps the per-frame retry budget when
+	// PendingFocusHighlight cannot land focus. Each frame burns one attempt,
+	// so 60 covers ~1 second at 60 FPS — long enough for a list scroll to
+	// register the editor's tag, short enough that a row that never accepts
+	// focus (collapsed ancestor, stale entry index) gives up cleanly instead
+	// of spinning forever.
+	focusHighlightMaxAttempts = 60
 
 	// Hotkey + color-legend hint shown in the notification bar's idle slot.
 	helpLegendItemGap    unit.Dp = 10
@@ -327,6 +344,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	}
 
 	p.Table.OnChanged = p.OnColumnOverrideChanged
+	p.Table.OnCommentChanged = p.onCommentChanged
 	p.Table.OnKeyCopied = p.OnKeyCopied
 	p.Table.OnCellFocused = func(row, col int) {
 		p.State.FocusedRow = row
@@ -338,6 +356,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	p.Table.OnCellContextMenu = p.openAnchorMenu
 	p.Table.OnAnchorBadgeClicked = p.openAliasesOfDialog
 	p.Table.OnAnchoredCellEdit = p.openUnlockDialog
+	p.Table.SearchQuery = p.Search.Editor.Text()
 
 	// Build columnEditors slice for search filter.
 	for c := range p.State.ColumnCount {
@@ -355,7 +374,15 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	// any search-induced auto-uncollapse below can be reverted when the user
 	// clears the search. Restore on the reverse transition.
 	inSearch := p.Search.Editor.Text() != ""
+	wasActive := p.State.SearchCollapseActive
 	p.syncSearchCollapseSnapshot(inSearch)
+
+	// Reset scroll to the top on the empty→non-empty search transition so the
+	// first match is visible instead of hidden below the prior scroll offset.
+	if !wasActive && p.State.SearchCollapseActive {
+		p.State.OverrideList.Position.First = 0
+		p.State.OverrideList.Position.Offset = 0
+	}
 
 	// Auto-expand any collapsed ancestors of search matches so results are
 	// never hidden. Mutates CollapsedKeys only — CollapsedPreSearch retains
@@ -382,12 +409,18 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 
 	// Resolve a pending restored focus key to a filtered row. If the key is no
 	// longer visible (filtered out or removed from the chart), drop the
-	// pending key and fall through to the clamps below.
+	// pending key and fall through to the clamps below. Tracked so that the
+	// section-advance logic below can tell an explicit user jump (respect the
+	// chosen row, even if it's a section) apart from a first-load default
+	// focus landing on an expanded section (advance to a leaf).
+	resolvedExplicitFocus := false
+
 	if p.State.PendingFocusKey != "" {
 		entries := p.State.Entries
 		for r, idx := range p.State.FilteredIndices {
 			if idx < len(entries) && entries[idx].Key == p.State.PendingFocusKey {
 				p.State.FocusedRow = r
+				resolvedExplicitFocus = true
 
 				break
 			}
@@ -408,16 +441,19 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 
 	// If the focused row points at an expanded section header (e.g. default
 	// zero value on first load), advance to the first non-section row so the
-	// initial highlight lands on an editable cell. Collapsed section headers
-	// are intentionally landable — users press Cmd+/ there to unfold.
-	if len(p.State.FilteredIndices) > 0 && p.State.FocusedRow >= 0 {
+	// initial highlight lands on an editable cell. Skipped when the user
+	// explicitly jumped to this row this frame — an alias badge click on a
+	// root section is a deliberate ask to focus that section, not a drift.
+	// Collapsed section headers are intentionally landable either way — users
+	// press Cmd+/ there to unfold.
+	if !resolvedExplicitFocus && len(p.State.FilteredIndices) > 0 && p.State.FocusedRow >= 0 {
 		entries := p.State.Entries
 		filtered := p.State.FilteredIndices
 
 		if idx := filtered[p.State.FocusedRow]; idx < len(entries) &&
 			entries[idx].IsSection() && !p.State.CollapsedKeys[entries[idx].Key] {
 			for r, fi := range filtered {
-				if fi < len(entries) && !entries[fi].IsSection() {
+				if fi < len(entries) && entries[fi].IsFocusable() {
 					p.State.FocusedRow = r
 
 					break
@@ -432,35 +468,70 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	// When the controller signals a pending focus highlight (fires once per
 	// chart load after the async UI-state load completes), focus the
 	// highlighted cell's editor so the user can start typing without having
-	// to click. Guarded on the search editor not being focused so a user who
-	// clicked Search while the chart was loading keeps their focus intact.
+	// to click. The flag stays set across frames until focus actually lands —
+	// the first attempt may be dropped because the editor's event tag wasn't
+	// yet registered in the ops tree (list still scrolling to row) or because
+	// the editors slice was reallocated mid-load. A one-line guard protects
+	// an actively-searching user: steal focus back to the cell only when the
+	// search editor is unfocused or empty.
 	if p.State.PendingFocusHighlight {
-		p.State.PendingFocusHighlight = false
-
 		if p.State.FocusedRow >= 0 && p.State.FocusedRow < len(p.State.FilteredIndices) {
-			// Scroll the restored row into view; otherwise the highlight
-			// lands off-screen and the user sees an unscrolled list with no
-			// visible focus indicator.
 			p.State.OverrideList.Position.First = max(0, p.State.FocusedRow-scrollContextRows)
 			p.State.OverrideList.Position.Offset = 0
 		}
 
-		if !gtx.Focused(p.Search.Editor) &&
-			p.State.ColumnCount > 0 &&
+		// Section rows have no editor cells, so a FocusCmd retry would spin
+		// forever waiting for a tag that never registers. Scroll lands the
+		// row in view; that's all the user can meaningfully "focus" on a
+		// section header. Same fallthrough for out-of-range indices.
+		targetIsFocusable := false
+
+		if p.State.ColumnCount > 0 &&
 			p.State.FocusedRow >= 0 && p.State.FocusedRow < len(p.State.FilteredIndices) &&
 			p.State.FocusedCol >= 0 && p.State.FocusedCol < p.State.ColumnCount {
+			entryIdx := p.State.FilteredIndices[p.State.FocusedRow]
+			if entryIdx < len(p.State.Entries) && p.State.Entries[entryIdx].IsFocusable() {
+				targetIsFocusable = true
+			}
+		}
+
+		done := true
+
+		if targetIsFocusable {
 			entryIdx := p.State.FilteredIndices[p.State.FocusedRow]
 			editors := p.State.Columns[p.State.FocusedCol].OverrideEditors
 
 			if entryIdx < len(editors) {
-				gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
+				searchBusy := gtx.Focused(p.Search.Editor) && p.Search.Editor.Text() != ""
+
+				switch {
+				case gtx.Focused(&editors[entryIdx]):
+					// Focus landed — stop retrying.
+				case searchBusy:
+					// User is actively typing in search; don't steal focus.
+				default:
+					gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
+					gtx.Execute(op.InvalidateCmd{})
+
+					p.State.FocusHighlightAttempts++
+
+					if p.State.FocusHighlightAttempts < focusHighlightMaxAttempts {
+						done = false
+					}
+				}
 			}
 		}
 
-		// Treat the restored focus as already-synced so we don't immediately
-		// re-persist it back to disk on the next change-detection check.
-		p.lastFocusedRow = p.State.FocusedRow
-		p.lastFocusedCol = p.State.FocusedCol
+		if done {
+			p.State.PendingFocusHighlight = false
+			p.State.FocusHighlightAttempts = 0
+
+			// Treat the restored focus as already-synced so we don't
+			// immediately re-persist it back to disk on the next
+			// change-detection check.
+			p.lastFocusedRow = p.State.FocusedRow
+			p.lastFocusedCol = p.State.FocusedCol
+		}
 	} else if p.State.FocusedRow != p.lastFocusedRow || p.State.FocusedCol != p.lastFocusedCol {
 		p.lastFocusedRow = p.State.FocusedRow
 		p.lastFocusedCol = p.State.FocusedCol
@@ -507,6 +578,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 
 					return dims
 				}),
+				layout.Rigid(p.layoutStickyParent),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					return p.Table.Layout(gtx,
 						p.State.Entries,

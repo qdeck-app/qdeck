@@ -28,15 +28,6 @@ type keySegment struct {
 	isIndex bool
 }
 
-// parentRef tracks the container holding the current node so that
-// a reallocated slice can be written back without re-walking from root.
-type parentRef struct {
-	container any
-	key       string
-	index     int
-	isIndex   bool
-}
-
 // parseKeySegments splits a flat key like "service.ports[0].name" into typed segments.
 func parseKeySegments(key string) ([]keySegment, error) {
 	if key == "" {
@@ -117,98 +108,6 @@ func parseArraySegment(seg string) (string, int, bool) {
 	}
 
 	return seg[:bracketIdx], idx, true
-}
-
-func setInParent(p parentRef, val any) error {
-	if p.isIndex {
-		slice, ok := p.container.([]any)
-		if !ok {
-			return fmt.Errorf("expected parent slice, got %T", p.container)
-		}
-
-		slice[p.index] = val
-	} else {
-		m, ok := p.container.(map[string]any)
-		if !ok {
-			return fmt.Errorf("expected parent map, got %T", p.container)
-		}
-
-		m[p.key] = val
-	}
-
-	return nil
-}
-
-// setNestedValue walks the nested structure, creating maps and slices as needed,
-// and sets the final value. Tracks the parent reference inline so that
-// reallocated slices can be written back in O(1) instead of re-walking from root.
-func setNestedValue(root map[string]any, segments []keySegment, value any) error {
-	var current any = root
-
-	// parent tracks the container that holds current, so we can write back
-	// a reallocated slice without re-walking from root.
-	parent := parentRef{container: root}
-
-	for i, seg := range segments {
-		isLast := i == len(segments)-1
-
-		if seg.isIndex {
-			slice, ok := current.([]any)
-			if !ok {
-				return fmt.Errorf("expected slice at index segment %d, got %T", seg.index, current)
-			}
-
-			// Grow slice if needed and write back to parent.
-			if len(slice) <= seg.index {
-				needed := seg.index + 1 - len(slice)
-				slice = append(slice, make([]any, needed)...)
-
-				if err := setInParent(parent, slice); err != nil {
-					return fmt.Errorf("write back grown slice at segment %d: %w", seg.index, err)
-				}
-			}
-
-			if isLast {
-				slice[seg.index] = value
-			} else {
-				next := segments[i+1]
-				if slice[seg.index] == nil {
-					if next.isIndex {
-						slice[seg.index] = make([]any, 0)
-					} else {
-						slice[seg.index] = make(map[string]any)
-					}
-				}
-
-				parent = parentRef{container: slice, index: seg.index, isIndex: true}
-				current = slice[seg.index]
-			}
-		} else {
-			m, ok := current.(map[string]any)
-			if !ok {
-				return fmt.Errorf("expected map at segment %q, got %T", seg.name, current)
-			}
-
-			if isLast {
-				m[seg.name] = value
-			} else {
-				next := segments[i+1]
-
-				if _, exists := m[seg.name]; !exists {
-					if next.isIndex {
-						m[seg.name] = make([]any, 0)
-					} else {
-						m[seg.name] = make(map[string]any)
-					}
-				}
-
-				parent = parentRef{container: m, key: seg.name}
-				current = m[seg.name]
-			}
-		}
-	}
-
-	return nil
 }
 
 // findNodeSubtree supports array index segments like "servers[0].host" by

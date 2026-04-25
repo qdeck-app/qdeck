@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	notificationBarHeight unit.Dp = 28
-	notificationPaddingH  unit.Dp = 16
-	notificationPaddingV  unit.Dp = 4
-	cursorWidth           unit.Dp = 8
-	cursorSpacing         unit.Dp = 4
+	notificationBarHeight   unit.Dp = 28
+	notificationPaddingH    unit.Dp = 16
+	notificationPaddingV    unit.Dp = 4
+	notificationIdleHintTop unit.Dp = 8
+	cursorWidth             unit.Dp = 8
+	cursorSpacing           unit.Dp = 4
 
 	cursorCycleMs       int64 = 1000
 	cursorOnMs          int64 = 500
@@ -58,7 +59,7 @@ func (n *NotificationBar) Layout(
 		layout.W.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{
 				Left: notificationPaddingH, Right: notificationPaddingH,
-				Top: notificationPaddingV,
+				Top: notificationIdleHintTop,
 			}.Layout(gtx, idleHint)
 		})
 

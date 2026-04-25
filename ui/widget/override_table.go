@@ -7,6 +7,7 @@ import (
 
 	"gioui.org/gesture"
 	"gioui.org/io/event"
+	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -33,7 +34,6 @@ const (
 	overridePaddingV       unit.Dp = 4
 	overridePaddingH       unit.Dp = 8
 	overrideIndentPerLevel unit.Dp = 12
-	overrideStickyPaddingV unit.Dp = 6
 	overrideScrollbarWidth unit.Dp = 10 // MinorWidth(6) + 2*MinorPadding(2)
 	overrideSeparatorH     unit.Dp = 1
 	overrideTreeGuideW     unit.Dp = 1
@@ -48,9 +48,15 @@ const (
 	overrideChevronSlotW   unit.Dp = 14 // fixed slot reserved before every key label
 	overrideChevronSize    unit.Dp = 6  // edge length of the filled chevron triangle
 	overrideBadgeGap       unit.Dp = 4  // left margin between the key label and anchor/alias badge
-	overrideBadgePaddingH  unit.Dp = 4  // horizontal padding inside an anchor badge chip
-	overrideBadgePaddingV  unit.Dp = 1  // vertical padding inside an anchor badge chip
-	overrideBadgeRadius    unit.Dp = 2  // corner radius of an anchor badge chip
+	// overrideCommentMaxLines clamps how many lines an orphan-comment row paints.
+	// Foot blocks in real chart values can be 20+ lines (commented-out YAML
+	// example configurations are common), and rendering all of them would push
+	// editable rows off-screen. Round-trip preservation is independent of how
+	// much we display; the underlying tree carries every byte through to save.
+	overrideCommentMaxLines         = 3
+	overrideBadgePaddingH   unit.Dp = 4 // horizontal padding inside an anchor badge chip
+	overrideBadgePaddingV   unit.Dp = 1 // vertical padding inside an anchor badge chip
+	overrideBadgeRadius     unit.Dp = 2 // corner radius of an anchor badge chip
 )
 
 // OverrideTable renders a unified table with default values on the left and
@@ -87,6 +93,11 @@ type OverrideTable struct {
 
 	// ShowComments controls whether comment lines above default value entries are displayed.
 	ShowComments bool
+
+	// SearchQuery is the current search text. When non-empty, key-column
+	// labels paint a yellow highlight behind the first case-insensitive match.
+	// Set by the page before Layout each frame.
+	SearchQuery string
 
 	hovers             []gesture.Hover
 	cellClicks         []gesture.Click
@@ -163,6 +174,13 @@ type OverrideTable struct {
 	// position in cell-local coordinates (unused by the current page handler
 	// — the page reads the page-local cursor position tracked at its root).
 	OnCellContextMenu func(col int, flatKey string, localPos image.Point)
+
+	// OnCommentChanged fires when the user types in a comment-row editor.
+	// The page-level handler harvests the column's comment editors into a
+	// DocComments structure so banner/trailer/foot edits round-trip on save.
+	// col identifies the source column whose comment editor changed; v1
+	// always reports commentSourceCol (0).
+	OnCommentChanged func(col int)
 
 	// OnAnchoredCellEdit fires when the user's keystrokes actually change the
 	// text of a cell that participates in a YAML anchor or alias. The widget
@@ -322,21 +340,18 @@ func (t *OverrideTable) Layout(
 	tablePass := pointer.PassOp{}.Push(gtx.Ops)
 	defer tablePass.Pop()
 
-	parent := t.stickyParent(entries, filteredIndices)
-
+	// Scrollbar markers overlay the whole table because they're rendered
+	// against the scrollbar column regardless of list content position. The
+	// list itself takes the full table area — the parent-path indicator that
+	// used to live as a sticky header inside the table now lives in the page
+	// header above (see ValuesPage.layoutStickyParent), so scrolling never
+	// triggers a layout change in the list and stays perfectly smooth.
 	return layout.Stack{}.Layout(gtx,
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
 			return material.List(t.Theme, t.List).Layout(gtx, len(filteredIndices),
 				func(gtx layout.Context, index int) layout.Dimensions {
 					return t.layoutRow(gtx, entries, filteredIndices, index)
 				})
-		}),
-		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-			if parent == "" {
-				return layout.Dimensions{}
-			}
-
-			return t.layoutStickyHeader(gtx, parent)
 		}),
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			t.layoutScrollbarMarkers(gtx, entries, filteredIndices)
@@ -362,6 +377,15 @@ func (t *OverrideTable) layoutRow(
 	}
 
 	entry := entries[entryIdx]
+
+	// Orphan-comment rows render as an editable caption in the right (override)
+	// panel — they're the user's annotations on the values file, not chart-side
+	// documentation. Round-tripping the underlying YAML foot comment goes
+	// through the source column's CustomValues fields on save.
+	if entry.IsComment() {
+		return t.layoutCommentRow(gtx, index, entryIdx, entry)
+	}
+
 	indent := overrideIndentPerLevel * unit.Dp(max(0, entry.Depth-1))
 	section := entry.IsSection()
 
@@ -394,24 +418,59 @@ func (t *OverrideTable) layoutRow(
 		Top: overridePaddingV, Bottom: overridePaddingV,
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			// Comment above entry (optional), constrained to left panel width.
+			// Section comment editor, rendered in the RIGHT panel above the
+			// section row. Section rows have no value editor, so this is the
+			// place where the user's section-divider text surfaces and can be
+			// edited. Always shown (regardless of ShowComments) because it's
+			// structural documentation; the editor accepts an empty value to
+			// delete the comment on save.
+			//
+			// Leaf rows do NOT render a separate editor here: their custom-file
+			// head comment is already encoded inline in the override editor's
+			// text as `# comment\nvalue` (via formatCommentForEditor on load),
+			// which IS the right-panel display + edit surface.
+			//
+			// Sources from commentSourceCol's editor pool (column 0 in v1) so
+			// section comment editing in multi-column setups always targets
+			// the user's primary values file.
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if entry.Comment == "" || !t.ShowComments {
+				if !section {
 					return layout.Dimensions{}
 				}
 
-				gtx.Constraints.Max.X = leftW
+				editors := t.ColumnEditors[commentSourceCol]
+				if entryIdx >= len(editors) {
+					return layout.Dimensions{}
+				}
 
-				return layout.Inset{Left: overridePaddingH}.Layout(gtx,
-					func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Left: indent + overrideChevronSlotW}.Layout(gtx,
-							func(gtx layout.Context) layout.Dimensions {
-								lbl := material.Caption(t.Theme, entry.Comment)
-								lbl.Color = theme.ColorMuted
+				if editors[entryIdx].Text() == "" {
+					return layout.Dimensions{}
+				}
 
-								return LayoutLabel(gtx, lbl)
-							})
-					})
+				t.processCommentEditorChange(gtx, entryIdx)
+
+				return layout.Flex{}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Dimensions{Size: image.Pt(leftW+dividerW, 0)}
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = rightW
+						gtx.Constraints.Max.X = rightW
+
+						// No depth indent on section-comment editors: the right
+						// panel has no chevron/indent guides to align against,
+						// so an indented comment just looks pushed in for no
+						// visual reason. Match the leaf editor's plain
+						// overridePaddingH so section comments sit flush with
+						// the override editors directly above and below.
+						return layout.Inset{
+							Left:  overridePaddingH,
+							Right: overridePaddingH,
+						}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return t.layoutCommentEditor(gtx, entryIdx, 0)
+						})
+					}),
+				)
 			}),
 			// Main row: left (key + value) | divider | right (override columns)
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -439,7 +498,7 @@ func (t *OverrideTable) layoutRow(
 													return t.layoutChevronSlot(gtx, index, entry.Key, section)
 												}),
 												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-													return LayoutLabel(gtx, lbl)
+													return LayoutHighlightedLabel(gtx, lbl, t.SearchQuery)
 												}),
 											)
 										})
@@ -476,7 +535,10 @@ func (t *OverrideTable) layoutRow(
 						gtx.Constraints.Max.X = rightW
 
 						if section {
-							return layout.Dimensions{Size: image.Pt(rightW, 0)}
+							// Section rows have no editor cells, but when a custom file
+							// attaches an anchor or alias to the section key itself (e.g.
+							// `master: &masterConfig`) the badge still needs to be visible.
+							return t.layoutSectionBadges(gtx, index, entry.Key, g, rightW)
 						}
 
 						return t.layoutRightColumns(gtx, index, entryIdx, entry.Key, g, entry.Type)
@@ -628,6 +690,259 @@ func (t *OverrideTable) layoutRightColumns(
 	}
 
 	return layout.Flex{}.Layout(gtx, children[:n]...)
+}
+
+// layoutSectionBadges renders just the anchor/alias badge for each active
+// override column on a section row. Section rows have no editor cells, so
+// the badge sits where the editor would be, aligned to the right edge of
+// each column so it lines up with regular-row badges below.
+func (t *OverrideTable) layoutSectionBadges(
+	gtx layout.Context,
+	rowIndex int,
+	entryKey string,
+	g colGeometry,
+	rightW int,
+) layout.Dimensions {
+	var children [state.MaxCustomColumns * 2]layout.FlexChild
+
+	n := 0
+
+	for c := range g.count {
+		col := c
+
+		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			_, w := g.columnBounds(col, rightW)
+
+			gtx.Constraints.Min.X = w
+			gtx.Constraints.Max.X = w
+
+			badgeInfo := t.columnAnchorInfo(col, entryKey)
+			colAnchors := t.columnAnchors(col)
+
+			return layout.Inset{Left: overridePaddingH}.Layout(gtx,
+				func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return layout.Dimensions{}
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return t.layoutAnchorBadge(
+								gtx, badgeInfo, colAnchors,
+								&t.columnBadgeClicks[col][rowIndex], col, entryKey,
+							)
+						}),
+					)
+				})
+		})
+		n++
+
+		if c < g.count-1 {
+			children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Dimensions{Size: image.Pt(g.subDivW, 0)}
+			})
+			n++
+		}
+	}
+
+	return layout.Flex{}.Layout(gtx, children[:n]...)
+}
+
+// layoutCommentRow paints an orphan-comment row from the user's custom values
+// file. Comment rows live in the same lane as the override editor (right side
+// of the table) so they read as the user's own annotations on the values
+// file, not as commentary mixed into the chart-defaults view. The left panel
+// (key + default value) stays empty — comment rows have no underlying leaf.
+//
+// Foot-block rows clamp to overrideCommentMaxLines so a 20-line YAML example
+// commented out for documentation can't dominate the table; banner and
+// trailer rows render unclamped because the user explicitly typed them at
+// file scope and wants the full text visible. ShowComments is NOT consulted —
+// these are first-class user annotations on their own file, not chart-side
+// documentation noise.
+//
+// The comment editor lives at columnEditors[sourceCol][entryIdx]. The slot is
+// otherwise unused (comment rows have no value), so reusing it avoids a
+// parallel editor pool. Source column is currently always 0 — multi-column
+// comment lanes are a follow-up.
+func (t *OverrideTable) layoutCommentRow(
+	gtx layout.Context, index int, entryIdx int, entry service.FlatValueEntry,
+) layout.Dimensions {
+	hovered := t.hovers[index].Update(gtx.Source)
+	if hovered {
+		t.HoveredRow = index
+	} else if t.HoveredRow == index {
+		t.HoveredRow = overrideNoHover
+	}
+
+	indent := overrideIndentPerLevel * unit.Dp(max(0, entry.Depth-1))
+	totalW := gtx.Constraints.Max.X
+
+	ratio := t.ratio()
+	dividerW := gtx.Dp(overrideDividerW)
+	leftW := int(ratio * float32(totalW))
+	rightW := max(totalW-leftW-dividerW, 0)
+
+	maxLines := 0
+	if entry.FootAfterKey != "" {
+		maxLines = overrideCommentMaxLines
+	}
+
+	t.processCommentEditorChange(gtx, entryIdx)
+
+	// Record content so backgrounds/dividers paint underneath the editor text.
+	m := op.Record(gtx.Ops)
+
+	dims := layout.Inset{Top: overridePaddingV, Bottom: overridePaddingV}.Layout(gtx,
+		func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{}.Layout(gtx,
+				// Left panel: empty. The comment doesn't belong to any leaf
+				// key, so the key + default value cells are blank. Reserving
+				// the width keeps the right-side comment aligned with leaf
+				// override editors directly above and below.
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Dimensions{Size: image.Pt(leftW, 0)}
+				}),
+				// Vertical divider matching leaf rows.
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Dimensions{Size: image.Pt(dividerW, 0)}
+				}),
+				// Right panel: comment editor, indented to the surrounding
+				// leaf's depth so the foot-block visually trails the leaf
+				// it annotates.
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					gtx.Constraints.Min.X = rightW
+					gtx.Constraints.Max.X = rightW
+
+					return layout.Inset{
+						Left:  overridePaddingH + indent,
+						Right: overridePaddingH,
+					}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return t.layoutCommentEditor(gtx, entryIdx, maxLines)
+					})
+				}),
+			)
+		})
+
+	if dims.Size.X < totalW {
+		dims.Size.X = totalW
+	}
+
+	c := m.Stop()
+
+	defer clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops).Pop()
+
+	// Register hover + click slots so the per-row buffers stay aligned with
+	// FilteredIndices. Click on the right panel focuses the comment editor.
+	t.hovers[index].Add(gtx.Ops)
+	t.cellClicks[index].Add(gtx.Ops)
+
+	t.handleCommentRowClick(gtx, index, entryIdx, leftW)
+
+	c.Add(gtx.Ops)
+
+	// Vertical divider painted on top of the recorded content (matches
+	// drawRowDecorations on leaf rows but inlined since we don't need the
+	// sub-column dividers / tree guides).
+	divLine := clip.Rect{
+		Min: image.Pt(leftW, 0),
+		Max: image.Pt(leftW+dividerW, dims.Size.Y),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	divLine.Pop()
+
+	// Horizontal separator at the bottom of the row.
+	separatorH := gtx.Dp(overrideSeparatorH)
+
+	sep := clip.Rect{
+		Min: image.Pt(0, dims.Size.Y-separatorH),
+		Max: image.Pt(totalW, dims.Size.Y),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	sep.Pop()
+
+	return dims
+}
+
+// commentSourceCol is the column whose editor pool backs comment-row text.
+// V1 always uses 0 — comments are sourced from the first loaded custom file.
+const commentSourceCol = 0
+
+// layoutCommentEditor paints the editor for a comment row. maxLines is
+// currently advisory only — the underlying widget.Editor in this Gio version
+// doesn't expose a per-instance line clamp, so foot-block rows rely on the
+// caller's typical foot-block content (a few lines) being short enough not
+// to dominate; banner/trailer rows render unclamped by design. _ is
+// reserved for a future clamp once we add a line-aware editor wrapper.
+func (t *OverrideTable) layoutCommentEditor(gtx layout.Context, entryIdx, _ int) layout.Dimensions {
+	editors := t.ColumnEditors[commentSourceCol]
+	if entryIdx >= len(editors) {
+		return layout.Dimensions{}
+	}
+
+	editors[entryIdx].SingleLine = false
+
+	ed := material.Editor(t.Theme, &editors[entryIdx], "")
+	ed.Color = theme.ColorMuted
+	ed.TextSize = viewerEditorTextSize
+
+	return LayoutEditor(gtx, t.Theme.Shaper, ed)
+}
+
+// processCommentEditorChange drains pending change events on the comment
+// editor for entryIdx and fires OnChanged once if any landed. Mirrors the
+// shape of processEditorChanges but skips the anchor / autoindent / override
+// flag bookkeeping that's leaf-specific.
+func (t *OverrideTable) processCommentEditorChange(gtx layout.Context, entryIdx int) {
+	editors := t.ColumnEditors[commentSourceCol]
+	if entryIdx >= len(editors) {
+		return
+	}
+
+	changed := false
+
+	for {
+		ev, ok := editors[entryIdx].Update(gtx)
+		if !ok {
+			break
+		}
+
+		if _, isChange := ev.(widget.ChangeEvent); isChange {
+			changed = true
+		}
+	}
+
+	if !changed || t.OnCommentChanged == nil {
+		return
+	}
+
+	t.OnCommentChanged(commentSourceCol)
+}
+
+// handleCommentRowClick focuses the comment editor when the user clicks
+// inside the right panel, matching how leaf rows put a text cursor at the
+// click point.
+func (t *OverrideTable) handleCommentRowClick(gtx layout.Context, index, entryIdx, leftW int) {
+	for {
+		ev, ok := t.cellClicks[index].Update(gtx.Source)
+		if !ok {
+			break
+		}
+
+		if ev.Kind != gesture.KindPress {
+			continue
+		}
+
+		if ev.Position.X < leftW {
+			continue
+		}
+
+		editors := t.ColumnEditors[commentSourceCol]
+		if entryIdx < len(editors) {
+			gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
+		}
+	}
 }
 
 // drawRowDecorations renders the divider line, sub-column dividers, tree guides,
@@ -803,50 +1118,33 @@ func (t *OverrideTable) gitChangeStatus(key string) domain.GitChangeStatus {
 	return best
 }
 
-// stickyParent returns the parent key path for the first visible entry.
-func (t *OverrideTable) stickyParent(entries []service.FlatValueEntry, filteredIndices []int) string {
+// CurrentParent returns the parent key path of the first row currently visible
+// in the list, or "" when no nested row is visible. The page header above the
+// table reads this each frame to render a fixed-position context strip — the
+// same information the previous in-list sticky header used to convey, but
+// without ever resizing the list. Comment rows have empty Key, so picking
+// them as the first visible row would always yield ""; skip forward to the
+// next non-comment row to source a stable parent path.
+func (t *OverrideTable) CurrentParent(entries []service.FlatValueEntry, filteredIndices []int) string {
 	first := t.List.Position.First
 	if first < 0 || first >= len(filteredIndices) {
 		return ""
 	}
 
-	entryIdx := filteredIndices[first]
-	if entryIdx >= len(entries) {
-		return ""
+	for i := first; i < len(filteredIndices); i++ {
+		entryIdx := filteredIndices[i]
+		if entryIdx >= len(entries) {
+			return ""
+		}
+
+		if entries[entryIdx].IsComment() {
+			continue
+		}
+
+		return parentPath(entries[entryIdx].Key)
 	}
 
-	return parentPath(entries[entryIdx].Key)
-}
-
-func (t *OverrideTable) layoutStickyHeader(gtx layout.Context, parent string) layout.Dimensions {
-	// Leave space on the right for the scrollbar so the header does not overlap it.
-	scrollW := gtx.Dp(overrideScrollbarWidth)
-	headerW := max(gtx.Constraints.Max.X-scrollW, 0)
-
-	return layout.Stack{}.Layout(gtx,
-		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-			rect := clip.Rect{Max: image.Pt(headerW, gtx.Constraints.Min.Y)}.Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorStickyHeader}.Add(gtx.Ops)
-			paint.PaintOp{}.Add(gtx.Ops)
-			rect.Pop()
-
-			return layout.Dimensions{Size: image.Pt(headerW, gtx.Constraints.Min.Y)}
-		}),
-		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-			gtx.Constraints.Max.X = headerW
-
-			return layout.Inset{
-				Top: overrideStickyPaddingV, Bottom: overrideStickyPaddingV,
-				Left: overridePaddingH, Right: overridePaddingH,
-			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Body2(t.Theme, parent)
-				lbl.Color = theme.ColorSecondary
-				lbl.MaxLines = 1
-
-				return LayoutLabel(gtx, lbl)
-			})
-		}),
-	)
+	return ""
 }
 
 // indentGuide describes one vertical guide line: its indent level and

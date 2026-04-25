@@ -105,16 +105,20 @@ func (t *OverrideTable) processEditorChanges(
 		if t.OnChanged != nil {
 			indent := service.DefaultYAMLIndent
 
-			var tree *yaml.Node
+			var (
+				tree *yaml.Node
+				docs service.DocComments
+			)
 
 			if cs := t.ColumnStates[c]; cs != nil {
 				indent = cs.YAMLIndent()
 				if cs.CustomValues != nil {
 					tree = cs.CustomValues.NodeTree
+					docs = cs.DocCommentsForSave()
 				}
 			}
 
-			yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree)
+			yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree, docs)
 			t.OnChanged(c, yamlText, yamlErr)
 		}
 	}

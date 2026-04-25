@@ -58,6 +58,12 @@ func (s *ValuesService) ReadDefaultValues(ctx context.Context, chartPath string)
 			attachComments(parentVF, comments)
 		}
 
+		if oc, parseErr := parseOrphanComments(rawData); parseErr == nil {
+			parentVF.DocHeadComment = oc.DocHead
+			parentVF.DocFootComment = oc.DocFoot
+			parentVF.FootComments = oc.Foots
+		}
+
 		var doc yaml.Node
 		if parseErr := yaml.Unmarshal(rawData, &doc); parseErr == nil && len(doc.Content) > 0 {
 			parentVF.NodeTree = doc.Content[0]
@@ -75,7 +81,14 @@ func (s *ValuesService) ReadDefaultValues(ctx context.Context, chartPath string)
 		return strings.Compare(string(a.Key), string(b.Key))
 	})
 
-	return &domain.ValuesFile{Source: "default", Entries: merged, NodeTree: parentVF.NodeTree}, nil
+	return &domain.ValuesFile{
+		Source:         "default",
+		Entries:        merged,
+		NodeTree:       parentVF.NodeTree,
+		DocHeadComment: parentVF.DocHeadComment,
+		DocFootComment: parentVF.DocFootComment,
+		FootComments:   parentVF.FootComments,
+	}, nil
 }
 
 func (s *ValuesService) LoadDefaultValues(ctx context.Context, chartPath string) (*FlatValues, error) {
@@ -177,6 +190,12 @@ func (s *ValuesService) ReadCustomValues(ctx context.Context, filePath string) (
 			attachComments(vf, comments)
 		}
 
+		if oc, parseErr := parseOrphanComments(rawData); parseErr == nil {
+			vf.DocHeadComment = oc.DocHead
+			vf.DocFootComment = oc.DocFoot
+			vf.FootComments = oc.Foots
+		}
+
 		var doc yaml.Node
 		if parseErr := yaml.Unmarshal(rawData, &doc); parseErr == nil && len(doc.Content) > 0 {
 			vf.NodeTree = doc.Content[0]
@@ -187,7 +206,13 @@ func (s *ValuesService) ReadCustomValues(ctx context.Context, filePath string) (
 }
 
 // ReadAndMergeCustomValues loads multiple values files and deep-merges them.
-// Later files override earlier ones. Comments from later files override earlier ones.
+// Later files override earlier ones for both data and per-leaf head/line
+// comments. The file-level shape — DocHeadComment, DocFootComment,
+// FootComments, and the preserved yaml.Node tree — is taken from the LAST
+// file only; earlier files' banners and trailers are intentionally dropped
+// because stacking multiple files' headers has no coherent rendering. The
+// indent setting is taken from the FIRST file so the canonical indent of
+// the user's primary values.yaml is preserved through edits.
 func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []string) (*domain.ValuesFile, error) {
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("read and merge custom values: %w", ctx.Err())
@@ -197,7 +222,12 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 	mergedComments := make(map[string]string)
 	indent := DefaultYAMLIndent
 
-	var lastNodeTree *yaml.Node
+	var (
+		lastNodeTree *yaml.Node
+		lastDocHead  string
+		lastDocFoot  string
+		lastFoots    map[string]string
+	)
 
 	for i, path := range paths {
 		vals, err := chartutil.ReadValuesFile(path)
@@ -220,6 +250,15 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 				}
 			}
 
+			// Banner / trailer / foot comments come from the last file only,
+			// matching how lastNodeTree is chosen. Earlier files' file-level
+			// comments wouldn't render coherently when stacked.
+			if oc, parseErr := parseOrphanComments(rawData); parseErr == nil {
+				lastDocHead = oc.DocHead
+				lastDocFoot = oc.DocFoot
+				lastFoots = oc.Foots
+			}
+
 			// Parse yaml.Node tree for comment-preserving serialization.
 			// Only the last file's tree is kept — inline/subtree comments from earlier files
 			// are lost for keys not redefined in later files. Head comments are preserved
@@ -236,6 +275,9 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 	vf.RawValues = merged
 	vf.Indent = indent
 	vf.NodeTree = lastNodeTree
+	vf.DocHeadComment = lastDocHead
+	vf.DocFootComment = lastDocFoot
+	vf.FootComments = lastFoots
 
 	attachComments(vf, mergedComments)
 
@@ -378,15 +420,32 @@ func ApplyCollapseFilter(
 
 	out = out[:0]
 
+	// Comment rows have no flat key of their own — visibility piggy-backs on the
+	// most recently seen non-comment row so a foot comment under a collapsed
+	// section disappears with that section.
+	lastNonCommentVisible := true
+
 	for _, idx := range indices {
 		if idx >= len(entries) {
 			continue
 		}
 
-		key := entries[idx].Key
+		entry := entries[idx]
+
+		if entry.IsComment() {
+			if lastNonCommentVisible {
+				out = append(out, idx)
+			}
+
+			continue
+		}
+
+		key := entry.Key
 
 		// The collapsed section header itself stays visible.
 		if collapsed[key] {
+			lastNonCommentVisible = true
+
 			out = append(out, idx)
 
 			continue
@@ -401,6 +460,8 @@ func ApplyCollapseFilter(
 				break
 			}
 		}
+
+		lastNonCommentVisible = !hidden
 
 		if !hidden {
 			out = append(out, idx)
@@ -454,13 +515,155 @@ func newFlatValues(vf *domain.ValuesFile) *FlatValues {
 		}
 	}
 
+	// Foot-comment rows are NOT spliced in here. They're file-source-specific
+	// (chart defaults vs. user's custom values) and shouldn't be cloned through
+	// RebuildUnifiedEntries from defaults — only the user's own custom file
+	// annotations belong in the unified table. The unified-entries layer
+	// reads FootComments / DocHeadComment / DocFootComment off the column's
+	// CustomValues directly and injects rows from there.
 	return &FlatValues{
-		Entries:   entries,
-		RawValues: vf.RawValues,
-		Indent:    vf.Indent,
-		NodeTree:  vf.NodeTree,
-		Anchors:   ExtractAnchors(vf.NodeTree),
+		Entries:        entries,
+		RawValues:      vf.RawValues,
+		Indent:         vf.Indent,
+		NodeTree:       vf.NodeTree,
+		Anchors:        ExtractAnchors(vf.NodeTree),
+		DocHeadComment: vf.DocHeadComment,
+		DocFootComment: vf.DocFootComment,
+		FootComments:   vf.FootComments,
+		KeyPositions:   buildFlatKeyPositions(vf.NodeTree),
 	}
+}
+
+// buildFlatKeyPositions walks the yaml.Node tree in DFS order and assigns
+// each visited mapping key (and sequence-item synthetic key like "[3]") a
+// sequential index, producing a flat-key → file-position map.
+//
+// The map is then used to sort the UI's unified entries list so it reflects
+// the source file's structure instead of alphabetical collation. Returns nil
+// for a missing or non-mapping root.
+//
+// Aliases (`*name`) point to the resolved node so flat keys derived from the
+// expanded structure (e.g. `master.persistence.enabled` when
+// `persistence: *defaults` aliases a defaults block with that leaf) still get
+// positions matching where they'd appear in source order. Merge keys
+// (`<<: *base`) inject sibling keys that this walk never visits — those keys
+// fall back to "end of file" positioning at sort time, which is fine for the
+// rare case of merged-in keys appearing in the unified table.
+func buildFlatKeyPositions(root *yaml.Node) map[string]int {
+	if root == nil {
+		return nil
+	}
+
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		root = root.Content[0]
+	}
+
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+
+	positions := make(map[string]int)
+	counter := 0
+
+	var walk func(node *yaml.Node, prefix string)
+
+	walk = func(node *yaml.Node, prefix string) {
+		switch node.Kind {
+		case yaml.MappingNode:
+			for i := 0; i < len(node.Content)-1; i += 2 {
+				k := node.Content[i]
+				v := node.Content[i+1]
+
+				if k == nil || v == nil || k.Value == "" {
+					continue
+				}
+
+				// Skip the merge-key indicator itself; merged-in siblings
+				// land at the parent's level and aren't part of this walk.
+				if k.Tag == mergeTag || k.Value == mergeKey {
+					continue
+				}
+
+				key := buildKey(prefix, k.Value)
+
+				if _, seen := positions[key]; !seen {
+					positions[key] = counter
+					counter++
+				}
+
+				target := v
+				if v.Kind == yaml.AliasNode && v.Alias != nil {
+					target = v.Alias
+				}
+
+				if target.Kind == yaml.MappingNode || target.Kind == yaml.SequenceNode {
+					walk(target, key)
+				}
+			}
+		case yaml.SequenceNode:
+			for i, child := range node.Content {
+				if child == nil {
+					continue
+				}
+
+				key := prefix + "[" + strconv.Itoa(i) + "]"
+
+				if _, seen := positions[key]; !seen {
+					positions[key] = counter
+					counter++
+				}
+
+				target := child
+				if child.Kind == yaml.AliasNode && child.Alias != nil {
+					target = child.Alias
+				}
+
+				if target.Kind == yaml.MappingNode || target.Kind == yaml.SequenceNode {
+					walk(target, key)
+				}
+			}
+		}
+	}
+
+	walk(root, "")
+
+	return positions
+}
+
+// SortByFilePositions reorders entries to match the source file's DFS layout.
+// Entries whose flat key has no recorded position (custom-only keys not in
+// the chart-defaults file, or keys merged in via `<<: *base`) sort to the
+// end, ordered alphabetically among themselves so the result stays
+// deterministic. Stable sort preserves relative order for ties — important
+// when the same position would otherwise produce a flap between frames.
+//
+// Empty positions or empty entries are no-ops; the caller can pass nil
+// without checking.
+func SortByFilePositions(entries []FlatValueEntry, positions map[string]int) {
+	if len(positions) == 0 || len(entries) == 0 {
+		return
+	}
+
+	end := len(positions)
+
+	slices.SortStableFunc(entries, func(a, b FlatValueEntry) int {
+		pa, hasA := positions[a.Key]
+		pb, hasB := positions[b.Key]
+
+		if !hasA {
+			pa = end
+		}
+
+		if !hasB {
+			pb = end
+		}
+
+		if pa != pb {
+			return pa - pb
+		}
+
+		return strings.Compare(a.Key, b.Key)
+	})
 }
 
 // flattenValues converts a nested map[string]any to a sorted flat list.

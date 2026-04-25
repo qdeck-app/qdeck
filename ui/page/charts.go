@@ -139,7 +139,10 @@ func (p *ChartsPage) layoutChartList(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-								layout.Rigid(customwidget.LabelWidget(material.Body1(p.Theme, chart.Name))),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+									return customwidget.LayoutHighlightedLabel(gtx,
+										material.Body1(p.Theme, chart.Name), query)
+								}),
 								layout.Rigid(layout.Spacer{Width: chartSpacerSmall}.Layout),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									lbl := material.Caption(p.Theme, chart.LatestVersion())
@@ -206,10 +209,12 @@ func (p *ChartsPage) layoutVersions(gtx layout.Context) layout.Dimensions {
 								func(gtx layout.Context) layout.Dimensions {
 									return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 										layout.Flexed(chartVersionFlex, func(gtx layout.Context) layout.Dimensions {
-											return customwidget.LayoutLabel(gtx, material.Body1(p.Theme, ver.Version))
+											return customwidget.LayoutHighlightedLabel(gtx,
+												material.Body1(p.Theme, ver.Version), query)
 										}),
 										layout.Flexed(chartVersionFlex, func(gtx layout.Context) layout.Dimensions {
-											return customwidget.LayoutLabel(gtx, material.Body2(p.Theme, "App: "+ver.AppVersion))
+											return customwidget.LayoutHighlightedLabel(gtx,
+												material.Body2(p.Theme, "App: "+ver.AppVersion), query)
 										}),
 										layout.Flexed(chartVersionFlex, func(gtx layout.Context) layout.Dimensions {
 											lbl := material.Caption(p.Theme, ver.Created.Format(chartDateFormat))
@@ -291,9 +296,21 @@ func (p *ChartsPage) scrollToFocused() {
 }
 
 // searchQuery returns the lowercased search query, caching to avoid per-frame allocation.
+// On the empty→non-empty transition, the visible list scrolls back to row 0 so
+// the first match is not hidden below the current scroll offset.
 func (p *ChartsPage) searchQuery() string {
 	raw := p.State.SearchEditor.Text()
 	if raw != p.cachedQueryRaw {
+		if p.cachedQueryRaw == "" && raw != "" {
+			if p.State.SelectedChart != "" {
+				p.State.VersionList.Position.First = 0
+				p.State.VersionList.Position.Offset = 0
+			} else {
+				p.State.ChartList.Position.First = 0
+				p.State.ChartList.Position.Offset = 0
+			}
+		}
+
 		p.cachedQueryRaw = raw
 		p.cachedQueryLower = strings.ToLower(raw)
 	}

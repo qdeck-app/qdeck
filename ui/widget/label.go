@@ -13,7 +13,10 @@ package widget
 
 import (
 	"image"
+	"image/color"
 	"math"
+	"strings"
+	"unicode/utf8"
 
 	"gioui.org/f32"
 	"gioui.org/font"
@@ -31,6 +34,12 @@ import (
 // glyphBatchSize is the number of glyphs buffered before flushing to the GPU.
 // Gio defaults to 32; we use 256 to avoid mid-line batch seams.
 const glyphBatchSize = 256
+
+// SearchHighlightColor is the yellow wash painted behind a matching substring
+// inside a label. Saturated and near-opaque so a single character stays
+// legible — the viewer's full-line highlight intentionally uses a softer
+// wash because it covers much more area.
+var SearchHighlightColor = color.NRGBA{R: 255, G: 215, B: 0, A: 200} //nolint:mnd // saturated amber highlight
 
 // LayoutEditor lays out a material.EditorStyle, rendering the hint text with
 // the larger glyph batch so it doesn't exhibit the vertical-stripe artefact.
@@ -92,6 +101,107 @@ func LabelWidget(l material.LabelStyle) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
 		return LayoutLabel(gtx, l)
 	}
+}
+
+// LayoutHighlightedLabel renders lbl with a yellow rectangle painted behind
+// the first case-insensitive occurrence of query inside lbl.Text. Forces
+// MaxLines to 1 so the highlight rect can't smear across wrapped lines.
+// ASCII-only — see measureMatchRange.
+func LayoutHighlightedLabel(gtx layout.Context, lbl material.LabelStyle, query string) layout.Dimensions {
+	lbl.MaxLines = 1
+
+	if query == "" {
+		return LayoutLabel(gtx, lbl)
+	}
+
+	matchStart := strings.Index(strings.ToLower(lbl.Text), strings.ToLower(query))
+	if matchStart < 0 {
+		return LayoutLabel(gtx, lbl)
+	}
+
+	matchEnd := matchStart + len(query)
+
+	x0, x1 := measureMatchRange(gtx, lbl, matchStart, matchEnd)
+
+	m := op.Record(gtx.Ops)
+	dims := LayoutLabel(gtx, lbl)
+	call := m.Stop()
+
+	if x1 > x0 {
+		rect := clip.Rect{Min: image.Pt(x0, 0), Max: image.Pt(x1, dims.Size.Y)}.Push(gtx.Ops)
+		paint.ColorOp{Color: SearchHighlightColor}.Add(gtx.Ops)
+		paint.PaintOp{}.Add(gtx.Ops)
+		rect.Pop()
+	}
+
+	call.Add(gtx.Ops)
+
+	return dims
+}
+
+// measureMatchRange returns the pixel x-range of bytes [byteStart, byteEnd)
+// in lbl.Text. Tracks position by rune count because Gio v0.9.0 exposes
+// per-cluster rune counts on FlagClusterBreak, not byte offsets.
+//
+// ASCII-only assumption: the byte→rune conversion treats the lowercased
+// search text as same-length as the original. Multi-byte case folding
+// (Turkish dotted-I, German ß) would misplace the rect; cluster-straddling
+// queries snap to the cluster boundary.
+func measureMatchRange(gtx layout.Context, lbl material.LabelStyle, byteStart, byteEnd int) (int, int) {
+	cs := gtx.Constraints
+	textSize := fixed.I(gtx.Sp(lbl.TextSize))
+	lineHeight := fixed.I(gtx.Sp(lbl.LineHeight))
+
+	maxLines := lbl.MaxLines
+	if maxLines == 0 {
+		maxLines = 1
+	}
+
+	lbl.Shaper.LayoutString(text.Parameters{
+		Font:            lbl.Font,
+		PxPerEm:         textSize,
+		MaxLines:        maxLines,
+		Truncator:       lbl.Truncator,
+		Alignment:       lbl.Alignment,
+		WrapPolicy:      lbl.WrapPolicy,
+		MaxWidth:        cs.Max.X,
+		MinWidth:        cs.Min.X,
+		Locale:          gtx.Locale,
+		LineHeight:      lineHeight,
+		LineHeightScale: lbl.LineHeightScale,
+	}, lbl.Text)
+
+	startRune := utf8.RuneCountInString(lbl.Text[:byteStart])
+	endRune := startRune + utf8.RuneCountInString(lbl.Text[byteStart:byteEnd])
+
+	var (
+		runesBefore int
+		x0, x1      int
+		haveX0      bool
+	)
+
+	for g, ok := lbl.Shaper.NextGlyph(); ok; g, ok = lbl.Shaper.NextGlyph() {
+		if !haveX0 && runesBefore >= startRune {
+			x0 = g.X.Floor()
+			haveX0 = true
+		}
+
+		if runesBefore >= startRune && runesBefore < endRune {
+			if right := (g.X + g.Advance).Ceil(); right > x1 {
+				x1 = right
+			}
+		}
+
+		if g.Flags&text.FlagClusterBreak != 0 {
+			runesBefore += int(g.Runes)
+		}
+	}
+
+	if !haveX0 {
+		return 0, 0
+	}
+
+	return x0, x1
 }
 
 // LayoutLabel lays out a material.LabelStyle using a larger glyph batch than
