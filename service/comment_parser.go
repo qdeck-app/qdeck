@@ -134,12 +134,11 @@ func walkFootComments(item commentStackItem, stack *[]commentStackItem, foots ma
 	}
 }
 
-// CleanCommentForDisplay strips "#" prefixes per line, drops blank-only lines,
-// and joins the remainder with "\n" — the same treatment cleanHeadComment
-// applies to leaf head comments. Use this when rendering an orphan comment in
-// a Caption widget so the user sees prose without yaml comment markers.
+// CleanCommentForDisplay strips "#" prefixes and preserves interior blank
+// lines so authored paragraph breaks survive the load → edit → save
+// round-trip. Leading and trailing blanks are trimmed.
 func CleanCommentForDisplay(raw string) string {
-	return cleanHeadComment(raw)
+	return cleanCommentLines(raw, false)
 }
 
 // FormatCommentForYAML converts plain user-typed prose back into the
@@ -261,7 +260,7 @@ func bestLineComment(candidates ...string) string {
 func bestHeadComment(candidates ...string) string {
 	for _, c := range candidates {
 		if c != "" {
-			return cleanHeadComment(c)
+			return cleanCommentLines(c, true)
 		}
 	}
 
@@ -274,27 +273,42 @@ func cleanSingleComment(c string) string {
 	return strings.TrimSpace(c)
 }
 
-// cleanHeadComment handles multi-line head comments by stripping "# " from each line.
-// Empty lines are intentionally skipped to produce compact output suitable for UI captions.
-func cleanHeadComment(hc string) string {
-	lines := strings.Split(hc, "\n")
-
+// cleanCommentLines strips "# " from each line and joins the remainder with
+// "\n". When dropBlankLines is true, every blank line is removed (compact
+// caption output); when false, interior blanks are preserved while leading
+// and trailing blanks are trimmed (round-trippable editor display).
+//
+// Single-pass: blanks are buffered as a count and flushed before the next
+// non-empty line, so the trailing-blank case naturally falls off when no
+// content follows.
+func cleanCommentLines(hc string, dropBlankLines bool) string {
 	var b strings.Builder
 
 	b.Grow(len(hc))
 
-	for _, line := range lines {
+	pendingBlanks := 0
+	haveContent := false
+
+	for _, line := range strings.Split(hc, "\n") {
 		cleaned := cleanSingleComment(strings.TrimSpace(line))
 		if cleaned == "" {
-			// Skip empty lines for compact output. This condenses multi-line comments
-			// to remove intentional blank lines, making them more suitable for display
-			// in compact UI captions.
+			pendingBlanks++
+
 			continue
 		}
 
-		if b.Len() > 0 {
+		if haveContent {
 			b.WriteByte('\n')
+
+			if !dropBlankLines {
+				for range pendingBlanks {
+					b.WriteByte('\n')
+				}
+			}
 		}
+
+		pendingBlanks = 0
+		haveContent = true
 
 		b.WriteString(cleaned)
 	}

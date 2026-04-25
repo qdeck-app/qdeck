@@ -224,11 +224,14 @@ type ValuesPageState struct {
 	// FilteredIndices is computed and clears it. PendingFocusHighlight asks
 	// Page.Layout to issue a key.FocusCmd on the highlighted editor on the
 	// next frame (set by the controller on chart load); Layout clears it
-	// after dispatch.
-	FocusedRow            int
-	FocusedCol            int
-	PendingFocusKey       string
-	PendingFocusHighlight bool
+	// after dispatch. FocusHighlightAttempts caps the retry budget so a row
+	// whose tag never registers (collapsed ancestor, scrolled-away list,
+	// non-focusable kind) cannot pin the UI in a forced-repaint loop.
+	FocusedRow             int
+	FocusedCol             int
+	PendingFocusKey        string
+	PendingFocusHighlight  bool
+	FocusHighlightAttempts int
 
 	// CollapsedKeys is the effective set of section flat keys whose descendants
 	// are hidden on the values page. Map for O(1) ancestor-prefix checks during

@@ -589,6 +589,7 @@ func (vc *ValuesController) ResetState() {
 	vc.State.Entries = nil
 	vc.State.PendingFocusKey = ""
 	vc.State.PendingFocusHighlight = false
+	vc.State.FocusHighlightAttempts = 0
 	vc.State.FocusedRow = 0
 	vc.State.FocusedCol = 0
 	vc.State.CollapsedKeys = nil
@@ -873,6 +874,7 @@ func (vc *ValuesController) pollChartUIState() {
 	vc.State.PendingFocusKey = res.Value.state.FocusedKey
 	vc.State.FocusedCol = res.Value.state.FocusedCol
 	vc.State.PendingFocusHighlight = true
+	vc.State.FocusHighlightAttempts = 0
 	vc.State.CollapsedKeys = collapsedSliceToMap(res.Value.state.CollapsedKeys)
 }
 

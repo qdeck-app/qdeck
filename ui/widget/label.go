@@ -104,12 +104,9 @@ func LabelWidget(l material.LabelStyle) layout.Widget {
 }
 
 // LayoutHighlightedLabel renders lbl with a yellow rectangle painted behind
-// the first case-insensitive occurrence of query inside lbl.Text. When query
-// is empty or does not match, it is equivalent to LayoutLabel.
-//
-// Forces lbl.MaxLines to 1 so the highlight rect — painted as a single
-// (x0, x1, fullHeight) rectangle — can never smear across wrapped lines.
-// Callers that need multi-line rendering should not use this widget.
+// the first case-insensitive occurrence of query inside lbl.Text. Forces
+// MaxLines to 1 so the highlight rect can't smear across wrapped lines.
+// ASCII-only — see measureMatchRange.
 func LayoutHighlightedLabel(gtx layout.Context, lbl material.LabelStyle, query string) layout.Dimensions {
 	lbl.MaxLines = 1
 
@@ -143,11 +140,13 @@ func LayoutHighlightedLabel(gtx layout.Context, lbl material.LabelStyle, query s
 }
 
 // measureMatchRange returns the pixel x-range of bytes [byteStart, byteEnd)
-// inside lbl.Text by shaping the label's text with the same parameters
-// LayoutLabel uses, then walking glyphs once. Position within the shaped text
-// is tracked as a rune count — Gio v0.9.0's text.Glyph exposes per-cluster
-// rune counts via Runes on FlagClusterBreak rather than a direct byte offset,
-// so we convert the byte-granular match range to rune indices first.
+// in lbl.Text. Tracks position by rune count because Gio v0.9.0 exposes
+// per-cluster rune counts on FlagClusterBreak, not byte offsets.
+//
+// ASCII-only assumption: the byte→rune conversion treats the lowercased
+// search text as same-length as the original. Multi-byte case folding
+// (Turkish dotted-I, German ß) would misplace the rect; cluster-straddling
+// queries snap to the cluster boundary.
 func measureMatchRange(gtx layout.Context, lbl material.LabelStyle, byteStart, byteEnd int) (int, int) {
 	cs := gtx.Constraints
 	textSize := fixed.I(gtx.Sp(lbl.TextSize))

@@ -81,6 +81,14 @@ const (
 	// scrolled-into-view target row (cell navigation, restored focus).
 	scrollContextRows = 2
 
+	// focusHighlightMaxAttempts caps the per-frame retry budget when
+	// PendingFocusHighlight cannot land focus. Each frame burns one attempt,
+	// so 60 covers ~1 second at 60 FPS — long enough for a list scroll to
+	// register the editor's tag, short enough that a row that never accepts
+	// focus (collapsed ancestor, stale entry index) gives up cleanly instead
+	// of spinning forever.
+	focusHighlightMaxAttempts = 60
+
 	// Hotkey + color-legend hint shown in the notification bar's idle slot.
 	helpLegendItemGap    unit.Dp = 10
 	helpGlyphTextGap     unit.Dp = 3
@@ -505,13 +513,18 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 					gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
 					gtx.Execute(op.InvalidateCmd{})
 
-					done = false
+					p.State.FocusHighlightAttempts++
+
+					if p.State.FocusHighlightAttempts < focusHighlightMaxAttempts {
+						done = false
+					}
 				}
 			}
 		}
 
 		if done {
 			p.State.PendingFocusHighlight = false
+			p.State.FocusHighlightAttempts = 0
 
 			// Treat the restored focus as already-synced so we don't
 			// immediately re-persist it back to disk on the next

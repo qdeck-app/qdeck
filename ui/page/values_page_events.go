@@ -65,6 +65,10 @@ func (p *ValuesPage) onCommentChanged(colIdx int) {
 		case entry.IsSection():
 			seenNonComment = true
 
+			if text == "" {
+				continue
+			}
+
 			if sectionHeads == nil {
 				sectionHeads = make(map[string]string)
 			}
@@ -73,13 +77,15 @@ func (p *ValuesPage) onCommentChanged(colIdx int) {
 		case !entry.IsComment():
 			seenNonComment = true
 		case entry.FootAfterKey != "":
+			if text == "" {
+				continue
+			}
+
 			if foots == nil {
 				foots = make(map[string]string)
 			}
 
-			if text != "" {
-				foots[entry.FootAfterKey] = service.FormatCommentForYAML(text)
-			}
+			foots[entry.FootAfterKey] = service.FormatCommentForYAML(text)
 		case !seenNonComment:
 			bannerText = service.FormatCommentForYAML(text)
 		default:
@@ -308,6 +314,7 @@ func (p *ValuesPage) handleCollapseShortcut(gtx layout.Context) {
 	if nextKey != "" {
 		p.State.PendingFocusKey = nextKey
 		p.State.PendingFocusHighlight = true
+		p.State.FocusHighlightAttempts = 0
 	}
 
 	gtx.Execute(op.InvalidateCmd{})

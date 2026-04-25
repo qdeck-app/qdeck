@@ -574,6 +574,7 @@ func (p *ValuesPage) jumpToFlatKey(gtx layout.Context, key string) {
 
 	p.State.PendingFocusKey = key
 	p.State.PendingFocusHighlight = true
+	p.State.FocusHighlightAttempts = 0
 
 	gtx.Execute(op.InvalidateCmd{})
 }

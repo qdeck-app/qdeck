@@ -206,7 +206,13 @@ func (s *ValuesService) ReadCustomValues(ctx context.Context, filePath string) (
 }
 
 // ReadAndMergeCustomValues loads multiple values files and deep-merges them.
-// Later files override earlier ones. Comments from later files override earlier ones.
+// Later files override earlier ones for both data and per-leaf head/line
+// comments. The file-level shape — DocHeadComment, DocFootComment,
+// FootComments, and the preserved yaml.Node tree — is taken from the LAST
+// file only; earlier files' banners and trailers are intentionally dropped
+// because stacking multiple files' headers has no coherent rendering. The
+// indent setting is taken from the FIRST file so the canonical indent of
+// the user's primary values.yaml is preserved through edits.
 func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []string) (*domain.ValuesFile, error) {
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("read and merge custom values: %w", ctx.Err())

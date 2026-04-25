@@ -304,10 +304,10 @@ func applySectionHeads(root *yaml.Node, heads map[string]string) error {
 	return applyTextByKey(root, heads, "section head key", applySectionHead)
 }
 
-// applyTextByKey dispatches the same parse-and-apply loop both apply* helpers
-// share: parse each flat key into segments, skip empties, call the apply
-// callback. Centralized so adding more "doc-comment by flat-key" maps doesn't
-// keep duplicating the same boilerplate.
+// applyTextByKey parses each flat key into segments and calls apply.
+// apply silently no-ops on missing keys so a stale annotation (e.g. chart
+// upgrade removed the key) doesn't fail the whole save; flat-key parse
+// errors still propagate.
 func applyTextByKey(
 	root *yaml.Node,
 	texts map[string]string,
@@ -341,6 +341,10 @@ func applySectionHead(root *yaml.Node, segments []keySegment, head string) {
 	}
 
 	if parent.Kind != yaml.MappingNode {
+		return
+	}
+
+	if slot < 1 || slot > len(parent.Content) {
 		return
 	}
 
@@ -550,6 +554,10 @@ func applyFootComment(root *yaml.Node, segments []keySegment, foot string) {
 
 	parent, slot, err := findParentSlot(root, segments)
 	if err != nil {
+		return
+	}
+
+	if slot < 0 || slot >= len(parent.Content) {
 		return
 	}
 

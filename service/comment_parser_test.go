@@ -94,15 +94,47 @@ func TestParseOrphanComments_Empty(t *testing.T) {
 	}
 }
 
-func TestCleanCommentForDisplay_StripsHashAndBlanks(t *testing.T) {
+func TestCleanCommentForDisplay_PreservesInteriorBlanks(t *testing.T) {
 	t.Parallel()
 
 	raw := "# foo\n#\n# bar\n#  \n# baz"
 	got := CleanCommentForDisplay(raw)
-	want := "foo\nbar\nbaz"
+	want := "foo\n\nbar\n\nbaz"
 
 	if got != want {
 		t.Errorf("CleanCommentForDisplay = %q, want %q", got, want)
+	}
+}
+
+func TestCleanCommentForDisplay_TrimsLeadingTrailingBlanks(t *testing.T) {
+	t.Parallel()
+
+	raw := "#\n# foo\n# bar\n#"
+	got := CleanCommentForDisplay(raw)
+	want := "foo\nbar"
+
+	if got != want {
+		t.Errorf("CleanCommentForDisplay = %q, want %q", got, want)
+	}
+}
+
+func TestCleanCommentForDisplay_RoundTripIdempotent(t *testing.T) {
+	t.Parallel()
+
+	// A blank line between paragraphs survives clean → format → clean so the
+	// editable comment surfaces preserve user-authored paragraph breaks.
+	raw := "# header line\n#\n# body line"
+
+	cleaned := CleanCommentForDisplay(raw)
+	formatted := FormatCommentForYAML(cleaned)
+	recleaned := CleanCommentForDisplay(formatted)
+
+	if recleaned != cleaned {
+		t.Errorf("round-trip mismatch: cleaned=%q, formatted=%q, recleaned=%q", cleaned, formatted, recleaned)
+	}
+
+	if formatted != raw {
+		t.Errorf("formatted form drifts from raw: got %q, want %q", formatted, raw)
 	}
 }
 
