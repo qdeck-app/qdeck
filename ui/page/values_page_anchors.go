@@ -461,7 +461,7 @@ func (p *ValuesPage) resolveFocusedCell() (int, string, bool) {
 	}
 
 	entry := p.State.Entries[entryIdx]
-	if entry.IsSection() {
+	if !entry.IsFocusable() {
 		return 0, "", false
 	}
 

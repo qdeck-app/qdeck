@@ -13,8 +13,86 @@ import (
 	"gioui.org/widget"
 
 	"github.com/qdeck-app/qdeck/domain"
+	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/state"
 )
+
+// onCommentChanged harvests the comment editors in the given column back into
+// its CustomValues banner / trailer / foot-comment fields and marks the column
+// modified so save picks up the changes. Comment edits don't go through the
+// editor-parse runner (which would clobber FootComments by re-parsing values
+// only); instead they update the CustomValues struct directly.
+//
+// Banner vs. trailer is identified positionally, matching commentInitialText:
+// the first comment row before any non-comment entry is the banner, comment
+// rows after at least one non-comment entry are the trailer. Foot-block rows
+// carry their FootAfterKey so they map straight back into the FootComments map.
+//
+// All editor texts are formatted via FormatCommentForYAML so the stored value
+// is the "# "-prefixed verbatim form yaml.v3 emits — the same shape
+// parseOrphanComments captured at load time, ensuring the round-trip stays
+// stable across save → reload.
+func (p *ValuesPage) onCommentChanged(colIdx int) {
+	if colIdx < 0 || colIdx >= state.MaxCustomColumns {
+		return
+	}
+
+	col := &p.State.Columns[colIdx]
+	if col.CustomValues == nil {
+		return
+	}
+
+	editors := col.OverrideEditors
+	entries := p.State.Entries
+
+	var (
+		bannerText   string
+		trailerText  string
+		foots        map[string]string
+		sectionHeads map[string]string
+	)
+
+	seenNonComment := false
+
+	for i, entry := range entries {
+		if i >= len(editors) {
+			continue
+		}
+
+		text := editors[i].Text()
+
+		switch {
+		case entry.IsSection():
+			seenNonComment = true
+
+			if sectionHeads == nil {
+				sectionHeads = make(map[string]string)
+			}
+
+			sectionHeads[entry.Key] = service.FormatCommentForYAML(text)
+		case !entry.IsComment():
+			seenNonComment = true
+		case entry.FootAfterKey != "":
+			if foots == nil {
+				foots = make(map[string]string)
+			}
+
+			if text != "" {
+				foots[entry.FootAfterKey] = service.FormatCommentForYAML(text)
+			}
+		case !seenNonComment:
+			bannerText = service.FormatCommentForYAML(text)
+		default:
+			trailerText = service.FormatCommentForYAML(text)
+		}
+	}
+
+	col.CustomValues.DocHeadComment = bannerText
+	col.CustomValues.DocFootComment = trailerText
+	col.CustomValues.FootComments = foots
+	col.CustomValues.SectionHeads = sectionHeads
+	col.ValuesModified = true
+}
 
 // onCollapseToggle flips the collapsed state for the given section key and
 // fires OnCollapseChanged so the controller persists the new set. During a
@@ -282,7 +360,7 @@ func (p *ValuesPage) firstLeafInsideSection(sectionKey string) string {
 			continue
 		}
 
-		if entries[i].IsSection() {
+		if !entries[i].IsFocusable() {
 			continue
 		}
 
@@ -355,7 +433,7 @@ func (p *ValuesPage) nextLeafOutsideSection(sectionKey string) string {
 	}
 
 	for i := sectionIdx - 1; i >= 0; i-- {
-		if entries[i].IsSection() {
+		if !entries[i].IsFocusable() {
 			continue
 		}
 
@@ -395,8 +473,10 @@ func (p *ValuesPage) moveCellFocusRow(gtx layout.Context, delta int) {
 		entry := entries[entryIdx]
 		// Stop on editable leaves (the common case) or on collapsed section
 		// headers, so the user can reach a collapsed chevron with the arrow
-		// keys and unfold it via Cmd+/.
-		if !entry.IsSection() || p.State.CollapsedKeys[entry.Key] {
+		// keys and unfold it via Cmd+/. Comment rows are skipped — they have
+		// no editor and no chevron, so landing on one would either lose focus
+		// silently or feel broken.
+		if entry.IsFocusable() || (entry.IsSection() && p.State.CollapsedKeys[entry.Key]) {
 			break
 		}
 	}
@@ -406,9 +486,10 @@ func (p *ValuesPage) moveCellFocusRow(gtx layout.Context, delta int) {
 
 	entryIdx := filtered[row]
 
-	if entries[entryIdx].IsSection() {
-		// Section rows have no visible editor; release keyboard focus so the
-		// previous editor doesn't keep receiving keystrokes.
+	if !entries[entryIdx].IsFocusable() {
+		// Section rows (and any other non-focusable row that ended the loop —
+		// only collapsed sections do) have no visible editor; release keyboard
+		// focus so the previous editor doesn't keep receiving keystrokes.
 		gtx.Execute(key.FocusCmd{Tag: nil})
 	} else if col >= 0 && col < p.State.ColumnCount {
 		editors := p.State.Columns[col].OverrideEditors
@@ -435,7 +516,7 @@ func (p *ValuesPage) moveCellFocusCol(gtx layout.Context, delta int) {
 		return
 	}
 
-	if idx := filtered[row]; idx >= len(entries) || entries[idx].IsSection() {
+	if idx := filtered[row]; idx >= len(entries) || !entries[idx].IsFocusable() {
 		return
 	}
 
@@ -450,7 +531,7 @@ func (p *ValuesPage) moveCellFocusCol(gtx layout.Context, delta int) {
 				}
 
 				idx := filtered[row]
-				if idx < len(entries) && !entries[idx].IsSection() {
+				if idx < len(entries) && entries[idx].IsFocusable() {
 					break
 				}
 			}
@@ -464,7 +545,7 @@ func (p *ValuesPage) moveCellFocusCol(gtx layout.Context, delta int) {
 				}
 
 				idx := filtered[row]
-				if idx < len(entries) && !entries[idx].IsSection() {
+				if idx < len(entries) && entries[idx].IsFocusable() {
 					break
 				}
 			}

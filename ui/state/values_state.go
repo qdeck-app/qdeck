@@ -36,6 +36,31 @@ func (c *CustomColumnState) YAMLIndent() int {
 	return service.DefaultYAMLIndent
 }
 
+// DocCommentsForSave returns the doc-level orphan comments — banner, trailer,
+// and per-leaf foot blocks — that the save path writes back via the
+// DocumentNode wrapper and applyDocFoots. The fields are kept in their
+// "# "-prefixed verbatim form on CustomValues, so this call is just a
+// pass-through.
+//
+// On initial load these fields hold the raw bytes parseOrphanComments
+// captured. As the user edits comment rows, onCommentChanged formats their
+// plain text back to "# "-prefixed form and writes it here, so subsequent
+// saves emit the user's prose with stable yaml comment markers. Returns a
+// zero DocComments when no custom values are loaded — the save path skips
+// banner/trailer/foot writes in that case.
+func (c *CustomColumnState) DocCommentsForSave() service.DocComments {
+	if c.CustomValues == nil {
+		return service.DocComments{}
+	}
+
+	return service.DocComments{
+		Head:         c.CustomValues.DocHeadComment,
+		Foot:         c.CustomValues.DocFootComment,
+		Foots:        c.CustomValues.FootComments,
+		SectionHeads: c.CustomValues.SectionHeads,
+	}
+}
+
 const helmInstallPrefix = "helm install"
 
 // CustomColumnState holds per-column widget state for an editable override column.
@@ -306,6 +331,86 @@ func (s *ValuesPageState) FocusedEntryKey() string {
 	return s.Entries[idx].Key
 }
 
+// firstCustomValues returns the first column with a loaded custom file, or
+// nil. Comments are sourced from this column only — the chart-defaults file
+// is excluded by design, since the user is editing the values file and only
+// wants to see THEIR annotations interleaved with the data.
+//
+// Multi-column scenarios surface only column 0's comments in v1; per-column
+// comment lanes are tracked as a follow-up.
+func (s *ValuesPageState) firstCustomValues() *service.FlatValues {
+	for c := range s.ColumnCount {
+		if cv := s.Columns[c].CustomValues; cv != nil {
+			return cv
+		}
+	}
+
+	return nil
+}
+
+// decorateWithCustomComments prepends a banner row, appends a trailer row,
+// and splices a foot-block row after every leaf that has a foot comment in
+// the user's custom values file. All three classes are EntryKindComment rows
+// rendered as muted captions. Banner/trailer have empty FootAfterKey so
+// layoutCommentRow renders them unclamped; foot-block rows carry the leaf
+// key in FootAfterKey for save-time round-trip.
+//
+// Returns entries unchanged when no custom file is loaded or it has no
+// orphan comments — the chart-defaults file's comments are intentionally
+// not surfaced here.
+func (s *ValuesPageState) decorateWithCustomComments(entries []service.FlatValueEntry) []service.FlatValueEntry {
+	cv := s.firstCustomValues()
+	if cv == nil {
+		return entries
+	}
+
+	hasBanner := cv.DocHeadComment != ""
+	hasTrailer := cv.DocFootComment != ""
+	hasFoots := len(cv.FootComments) > 0
+
+	if !hasBanner && !hasTrailer && !hasFoots {
+		return entries
+	}
+
+	out := make([]service.FlatValueEntry, 0, len(entries)+len(cv.FootComments)+2) //nolint:mnd // banner + footer slots
+
+	if hasBanner {
+		out = append(out, service.FlatValueEntry{
+			Kind:    service.EntryKindComment,
+			Type:    "comment",
+			Comment: service.CleanCommentForDisplay(cv.DocHeadComment),
+		})
+	}
+
+	for _, e := range entries {
+		out = append(out, e)
+
+		if !hasFoots {
+			continue
+		}
+
+		if rawFoot, ok := cv.FootComments[e.Key]; ok && rawFoot != "" {
+			out = append(out, service.FlatValueEntry{
+				Kind:         service.EntryKindComment,
+				Type:         "comment",
+				Depth:        e.Depth,
+				Comment:      service.CleanCommentForDisplay(rawFoot),
+				FootAfterKey: e.Key,
+			})
+		}
+	}
+
+	if hasTrailer {
+		out = append(out, service.FlatValueEntry{
+			Kind:    service.EntryKindComment,
+			Type:    "comment",
+			Comment: service.CleanCommentForDisplay(cv.DocFootComment),
+		})
+	}
+
+	return out
+}
+
 // RebuildUnifiedEntries recomputes Entries as the union of DefaultValues.Entries
 // and any keys present only in active columns' CustomValues. Entries are sorted
 // by flat key. Returns the previous Entries slice (for caller-side editor
@@ -336,21 +441,33 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 
 	defaults := s.DefaultValues.Entries
 
-	// Fast path: no active column has loaded custom values, so entries == defaults.
-	// Avoids allocating defaultKeys and customOnly on every editor-parse result
-	// for the common case of editing within keys that already exist in defaults.
+	// Fast path: no active column has loaded custom values. Strip every entry's
+	// Comment (defaults-side documentation noise is hidden by design — only the
+	// user's custom file contributes visible comments) and skip the customOnly
+	// merge since there's nothing to merge.
 	if !s.anyColumnHasCustomValues() {
-		if entriesEqual(prev, defaults) {
+		stripped := stripCommentsFrom(defaults)
+		service.SortByFilePositions(stripped, s.DefaultValues.KeyPositions)
+		decorated := s.decorateWithCustomComments(stripped)
+
+		if entriesEqual(prev, decorated) {
 			return prev, false
 		}
 
-		s.Entries = slices.Clone(defaults)
+		s.Entries = decorated
 
 		return prev, true
 	}
 
 	defaultKeys := make(map[string]struct{}, len(defaults))
 	for i := range defaults {
+		// Synthetic comment rows share an empty Key — don't seed defaultKeys
+		// with them or every custom-side comment row would be mis-classified
+		// as overlapping a default key.
+		if defaults[i].IsComment() {
+			continue
+		}
+
 		defaultKeys[defaults[i].Key] = struct{}{}
 	}
 
@@ -367,6 +484,14 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 		}
 
 		for _, e := range cv.Entries {
+			// Custom-side orphan-comment rows aren't integrated into the
+			// unified table — defaults' comment rows are the source of truth
+			// for what the table renders. Custom files' foot comments still
+			// round-trip on save via the NodeTree.
+			if e.IsComment() {
+				continue
+			}
+
 			if _, isDefault := defaultKeys[e.Key]; isDefault {
 				if e.Comment != "" {
 					if _, seen := customComments[e.Key]; !seen {
@@ -395,57 +520,78 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 	// still apply custom-side comment upgrades to the cloned entries.
 	if len(customOnly) == 0 {
 		withComments := applyCustomComments(defaults, customComments)
+		service.SortByFilePositions(withComments, s.DefaultValues.KeyPositions)
+		decorated := s.decorateWithCustomComments(withComments)
 
-		if entriesEqual(prev, withComments) {
+		if entriesEqual(prev, decorated) {
 			return prev, false
 		}
 
-		s.Entries = withComments
+		s.Entries = decorated
 
 		return prev, true
 	}
 
+	// applyCustomComments strips defaults' Comment field and rewrites it from
+	// the customComments map; customOnly entries already carry their own
+	// custom-side Comment from the source file's parseComments. Together this
+	// guarantees every entry's Comment field reflects only the user's values
+	// file annotations — defaults-side comments are never visible.
 	merged := make([]service.FlatValueEntry, 0, len(defaults)+len(customOnly))
-	merged = append(merged, defaults...)
+	merged = append(merged, applyCustomComments(defaults, customComments)...)
 
 	for _, e := range customOnly {
 		merged = append(merged, e)
 	}
 
-	slices.SortFunc(merged, func(a, b service.FlatValueEntry) int {
-		return strings.Compare(a.Key, b.Key)
-	})
+	// Sort by chart-defaults file position so the table mirrors values.yaml
+	// layout. customOnly entries have no defaults position and sort to the
+	// end alphabetically (handled by SortByFilePositions's tiebreak).
+	service.SortByFilePositions(merged, s.DefaultValues.KeyPositions)
 
-	for i := range merged {
-		if c, ok := customComments[merged[i].Key]; ok {
-			merged[i].Comment = c
-		}
-	}
+	decorated := s.decorateWithCustomComments(merged)
 
-	if entriesEqual(prev, merged) {
+	if entriesEqual(prev, decorated) {
 		return prev, false
 	}
 
-	s.Entries = merged
+	s.Entries = decorated
 
 	return prev, true
 }
 
-// applyCustomComments returns a copy of defaults with Comment replaced by any
-// non-empty custom-side annotation for the same key. When customComments is
-// empty, the clone is still returned — callers compare by value, so identity
-// isn't load-bearing.
+// applyCustomComments returns a copy of defaults whose Comment field reflects
+// only the user's custom values file: keys present in customComments take that
+// value, every other entry has its Comment cleared. The chart-defaults file's
+// own comments — copyright headers, section dividers, leaf docs from helm
+// charts — are never carried into the unified table; only the user's
+// annotations on their values file appear.
+//
+// Callers compare the returned slice by value via entriesEqual, so identity
+// doesn't matter; an empty customComments still returns a clone with every
+// Comment stripped.
 func applyCustomComments(defaults []service.FlatValueEntry, customComments map[string]string) []service.FlatValueEntry {
 	out := slices.Clone(defaults)
-
-	if len(customComments) == 0 {
-		return out
-	}
 
 	for i := range out {
 		if c, ok := customComments[out[i].Key]; ok {
 			out[i].Comment = c
+		} else {
+			out[i].Comment = ""
 		}
+	}
+
+	return out
+}
+
+// stripCommentsFrom returns a clone of entries with every Comment field
+// cleared. Used in the no-custom-file fast path where there's no custom
+// source to override defaults' comments — and we don't want to surface
+// defaults' comments either.
+func stripCommentsFrom(entries []service.FlatValueEntry) []service.FlatValueEntry {
+	out := slices.Clone(entries)
+	for i := range out {
+		out[i].Comment = ""
 	}
 
 	return out

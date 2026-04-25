@@ -399,6 +399,11 @@ func (vc *ValuesController) pollEditorParse() {
 				// stays authoritative across edits — ParseEditorContent does
 				// not reparse it, and PatchNodeTree works against a deep copy
 				// so successive saves start from the same original tree.
+				// Doc-level orphan comments (banner/trailer/per-leaf foots)
+				// are similarly load-time metadata: ParseEditorContent only
+				// sees the editor's value text, so it can't recover them —
+				// carry them across so the banner strip and comment-row
+				// renderers don't lose their data on every keystroke.
 				if col.CustomValues != nil {
 					if col.CustomValues.Indent > 0 {
 						res.Value.Indent = col.CustomValues.Indent
@@ -410,6 +415,18 @@ func (vc *ValuesController) pollEditorParse() {
 
 					if col.CustomValues.Anchors != nil {
 						res.Value.Anchors = col.CustomValues.Anchors
+					}
+
+					if col.CustomValues.DocHeadComment != "" {
+						res.Value.DocHeadComment = col.CustomValues.DocHeadComment
+					}
+
+					if col.CustomValues.DocFootComment != "" {
+						res.Value.DocFootComment = col.CustomValues.DocFootComment
+					}
+
+					if col.CustomValues.FootComments != nil {
+						res.Value.FootComments = col.CustomValues.FootComments
 					}
 				}
 
@@ -627,12 +644,32 @@ func (vc *ValuesController) populateColumnOverrides(colIdx int) {
 	// is the source of truth, so slots whose keys are absent from the new file
 	// get cleared. Without this, loading a replacement file leaves behind text
 	// for keys that existed only in the previous file.
+	//
+	// Comment rows reuse the same per-entry editor slot but are populated with
+	// the cleaned (no "# " prefix) text of the corresponding banner / trailer /
+	// foot block, so the user can edit the prose directly. Only the v1 source
+	// column (column 0) populates these — see commentSourceCol in widget pkg.
 	for i, entry := range vc.State.Entries {
 		ed := &col.OverrideEditors[i]
 
-		val, ok := resolveCustomValueWithComments(customMap, commentMap, rawValues, nodeTree, entry.Key, indent)
-		if !ok {
-			val = ""
+		var val string
+
+		switch {
+		case entry.IsComment():
+			val = commentInitialText(colIdx, col.CustomValues, entry, vc.State.Entries, i)
+		case entry.IsSection():
+			// Sections have no value editor; their slot in the column's editor
+			// pool is repurposed for the section-row comment editor (v1 only
+			// in commentSourceCol). entry.Comment was narrowed to custom-side
+			// only in RebuildUnifiedEntries, so this is the user's section
+			// comment text from their values file (cleaned, no "#" prefixes).
+			if colIdx == commentSourceColIdx {
+				val = entry.Comment
+			}
+		default:
+			if v, ok := resolveCustomValueWithComments(customMap, commentMap, rawValues, nodeTree, entry.Key, indent); ok {
+				val = v
+			}
 		}
 
 		if ed.Text() != val {
@@ -643,6 +680,60 @@ func (vc *ValuesController) populateColumnOverrides(colIdx int) {
 	col.RebuildOverrideFlags()
 	col.DrainPendingChanges = true
 	col.ValuesModified = false
+}
+
+// commentSourceColIdx is the column whose editor pool backs both orphan
+// comment rows and section comment edits — kept in sync with the widget-
+// package commentSourceCol constant. v1 sources comments from column 0
+// only; multi-column lanes are a follow-up.
+const commentSourceColIdx = 0
+
+// commentInitialText returns the cleaned text to seed a comment-row editor
+// with on column load. Banner and trailer rows have empty FootAfterKey;
+// banner is identified positionally as the first comment row before any
+// non-comment entry, trailer as a comment row after at least one
+// non-comment entry. Foot-block rows source from cv.FootComments[FootAfterKey].
+//
+// V1 sources comments only from the comment-source column (column 0). Other
+// columns get blank text in their comment-row editor slots so editing in a
+// non-source column is a no-op rather than a confusing duplicate input.
+func commentInitialText(
+	colIdx int,
+	cv *service.FlatValues,
+	entry service.FlatValueEntry,
+	allEntries []service.FlatValueEntry,
+	entryIdx int,
+) string {
+	if cv == nil || colIdx != 0 {
+		return ""
+	}
+
+	if entry.FootAfterKey != "" {
+		raw, ok := cv.FootComments[entry.FootAfterKey]
+		if !ok {
+			return ""
+		}
+
+		return service.CleanCommentForDisplay(raw)
+	}
+
+	// Banner vs trailer: scan upward — if any earlier entry is non-comment,
+	// this row sits after the data block, so it's the trailer.
+	seenNonComment := false
+
+	for i := 0; i < entryIdx && i < len(allEntries); i++ {
+		if !allEntries[i].IsComment() {
+			seenNonComment = true
+
+			break
+		}
+	}
+
+	if seenNonComment {
+		return service.CleanCommentForDisplay(cv.DocFootComment)
+	}
+
+	return service.CleanCommentForDisplay(cv.DocHeadComment)
 }
 
 // resolveCustomValueWithComments resolves a custom value for editor display, preserving YAML comments.

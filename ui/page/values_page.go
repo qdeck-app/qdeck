@@ -336,6 +336,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	}
 
 	p.Table.OnChanged = p.OnColumnOverrideChanged
+	p.Table.OnCommentChanged = p.onCommentChanged
 	p.Table.OnKeyCopied = p.OnKeyCopied
 	p.Table.OnCellFocused = func(row, col int) {
 		p.State.FocusedRow = row
@@ -444,7 +445,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		if idx := filtered[p.State.FocusedRow]; idx < len(entries) &&
 			entries[idx].IsSection() && !p.State.CollapsedKeys[entries[idx].Key] {
 			for r, fi := range filtered {
-				if fi < len(entries) && !entries[fi].IsSection() {
+				if fi < len(entries) && entries[fi].IsFocusable() {
 					p.State.FocusedRow = r
 
 					break
@@ -481,7 +482,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 			p.State.FocusedRow >= 0 && p.State.FocusedRow < len(p.State.FilteredIndices) &&
 			p.State.FocusedCol >= 0 && p.State.FocusedCol < p.State.ColumnCount {
 			entryIdx := p.State.FilteredIndices[p.State.FocusedRow]
-			if entryIdx < len(p.State.Entries) && !p.State.Entries[entryIdx].IsSection() {
+			if entryIdx < len(p.State.Entries) && p.State.Entries[entryIdx].IsFocusable() {
 				targetIsFocusable = true
 			}
 		}

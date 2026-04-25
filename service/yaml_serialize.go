@@ -56,13 +56,36 @@ type OverrideEntry struct {
 	LineComment string
 }
 
+// DocComments carries comment blocks that aren't attached to any leaf
+// key/value pair, but still need to round-trip on save:
+//
+//   - Head: file-level banner — written as DocumentNode.HeadComment.
+//   - Foot: file-level trailer — written as DocumentNode.FootComment.
+//   - Foots: leafKey -> trailing block, written as that leaf's
+//     valNode.FootComment.
+//   - SectionHeads: sectionKey -> head comment, written as that section
+//     key node's HeadComment. Used when the user edits a section-row
+//     comment inline; the deep-copied tree's existing HeadComment carries
+//     unedited section comments through unchanged, so this map holds only
+//     the user's edits.
+//
+// Zero value is the no-op: no banner, no trailer, no foots, no section
+// heads. Maps may be nil.
+type DocComments struct {
+	Head         string
+	Foot         string
+	Foots        map[string]string
+	SectionHeads map[string]string
+}
+
 // FlatEntriesToYAML reconstructs nested YAML from flat dot-separated key-value
 // pairs. indent controls the number of spaces per nesting level in the output.
-// Returns empty string when entries is empty. Builds a yaml.Node tree via
-// upsertPath so head/line comments from each OverrideEntry can be attached to
-// the appropriate key/value nodes before marshalling.
-func FlatEntriesToYAML(entries []OverrideEntry, indent int) (string, error) {
-	if len(entries) == 0 {
+// Returns empty string when entries is empty AND no doc-level comments are set.
+// Builds a yaml.Node tree via upsertPath so head/line comments from each
+// OverrideEntry can be attached to the appropriate key/value nodes, plus any
+// banner/trailer/foot blocks from docs, before marshalling.
+func FlatEntriesToYAML(entries []OverrideEntry, indent int, docs DocComments) (string, error) {
+	if len(entries) == 0 && docs.Head == "" && docs.Foot == "" && len(docs.Foots) == 0 {
 		return "", nil
 	}
 
@@ -85,20 +108,15 @@ func FlatEntriesToYAML(entries []OverrideEntry, indent int) (string, error) {
 		applyOverrideComments(root, segments, e.HeadComment, e.LineComment)
 	}
 
-	var buf bytes.Buffer
-
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(indent)
-
-	if err := enc.Encode(root); err != nil {
-		return "", fmt.Errorf("marshal overrides to YAML: %w", err)
+	if err := applyDocFoots(root, docs.Foots); err != nil {
+		return "", err
 	}
 
-	if err := enc.Close(); err != nil {
-		return "", fmt.Errorf("close YAML encoder: %w", err)
+	if err := applySectionHeads(root, docs.SectionHeads); err != nil {
+		return "", err
 	}
 
-	return buf.String(), nil
+	return encodeWithDocComments(root, indent, docs.Head, docs.Foot)
 }
 
 // LookupRawValue navigates a nested map using a flat key (e.g., "auth.fernetKey" or "apiVersions[0]")
@@ -206,9 +224,9 @@ func SerializeNodeSubtree(nodeTree *yaml.Node, keyPath string, indent int) (stri
 //     new sibling entry that shadows the merge, which matches how Helm would
 //     evaluate the override. Clearing an inherited-only key is a no-op — the
 //     value comes from the merge target, not the local mapping.
-func PatchNodeTree(root *yaml.Node, entries []OverrideEntry, indent int) (string, error) {
+func PatchNodeTree(root *yaml.Node, entries []OverrideEntry, indent int, docs DocComments) (string, error) {
 	if root == nil || root.Kind != yaml.MappingNode {
-		return FlatEntriesToYAML(entries, indent)
+		return FlatEntriesToYAML(entries, indent, docs)
 	}
 
 	workingTree := deepCopyYAMLNode(root)
@@ -262,12 +280,93 @@ func PatchNodeTree(root *yaml.Node, entries []OverrideEntry, indent int) (string
 		}
 	}
 
+	if err := applyDocFoots(workingTree, docs.Foots); err != nil {
+		return "", err
+	}
+
+	return encodeWithDocComments(workingTree, indent, docs.Head, docs.Foot)
+}
+
+// applyDocFoots writes each (leafKey -> footText) pair as the FootComment of
+// the value node identified by leafKey. Missing keys are skipped silently
+// (the source file may have changed since the foot was captured); empty foots
+// are no-ops via applyFootComment. Used by both FlatEntriesToYAML and
+// PatchNodeTree.
+func applyDocFoots(root *yaml.Node, foots map[string]string) error {
+	return applyTextByKey(root, foots, "foot key", applyFootComment)
+}
+
+// applySectionHeads writes each (sectionKey -> headText) pair as the
+// HeadComment on the corresponding section's key node. Used when the user
+// edits a section-row comment inline; non-edited sections keep whatever
+// HeadComment the deep-copied tree already carries.
+func applySectionHeads(root *yaml.Node, heads map[string]string) error {
+	return applyTextByKey(root, heads, "section head key", applySectionHead)
+}
+
+// applyTextByKey dispatches the same parse-and-apply loop both apply* helpers
+// share: parse each flat key into segments, skip empties, call the apply
+// callback. Centralized so adding more "doc-comment by flat-key" maps doesn't
+// keep duplicating the same boilerplate.
+func applyTextByKey(
+	root *yaml.Node,
+	texts map[string]string,
+	keyKind string,
+	apply func(root *yaml.Node, segments []keySegment, text string),
+) error {
+	for k, text := range texts {
+		segments, err := parseKeySegments(k)
+		if err != nil {
+			return fmt.Errorf("parse %s %q: %w", keyKind, k, err)
+		}
+
+		if len(segments) == 0 {
+			continue
+		}
+
+		apply(root, segments, text)
+	}
+
+	return nil
+}
+
+// applySectionHead sets HeadComment on the key node identified by segments,
+// which must address a mapping or sequence inside `root`. Empty `head` clears
+// the comment so the user can delete a section-row comment by emptying its
+// editor and saving.
+func applySectionHead(root *yaml.Node, segments []keySegment, head string) {
+	parent, slot, err := findParentSlot(root, segments)
+	if err != nil {
+		return
+	}
+
+	if parent.Kind != yaml.MappingNode {
+		return
+	}
+
+	parent.Content[slot-1].HeadComment = head
+}
+
+// encodeWithDocComments serializes root to YAML, wrapping it in a synthetic
+// DocumentNode so that docHead and docFoot land as the file's banner and
+// trailer. yaml.v3's encoder writes DocumentNode head/foot comments verbatim,
+// matching what parseOrphanComments captured at load time. docHead/docFoot
+// are written raw — caller passes raw "# "-prefixed text for round-trip
+// fidelity.
+func encodeWithDocComments(root *yaml.Node, indent int, docHead, docFoot string) (string, error) {
+	doc := &yaml.Node{
+		Kind:        yaml.DocumentNode,
+		HeadComment: docHead,
+		FootComment: docFoot,
+		Content:     []*yaml.Node{root},
+	}
+
 	var buf bytes.Buffer
 
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(indent)
 
-	if err := enc.Encode(workingTree); err != nil {
+	if err := enc.Encode(doc); err != nil {
 		return "", fmt.Errorf("marshal patched tree: %w", err)
 	}
 
@@ -386,12 +485,14 @@ func overrideCommentsMatch(entryHead, entryLine, effHead, effLine string) bool {
 	return entryHead == effHead || entryHead == effLine
 }
 
-// applyOverrideComments normalizes comment placement on the leaf at segments:
-// clears any existing head/line/foot comments on the key and value nodes,
-// then writes the user's head block as HeadComment on the key (or the item
-// node in a sequence) and the user's inline comment as LineComment on the
-// value node. Empty strings leave the slot cleared. The "# " prefix is added
-// here because yaml.v3 emits HeadComment and LineComment verbatim.
+// applyOverrideComments normalizes head/line comments on the leaf at segments:
+// clears existing head/line on the key and value nodes, then writes the user's
+// head block as HeadComment on the key (or the item node in a sequence) and
+// the user's inline comment as LineComment on the value node. FootComment is
+// intentionally NOT cleared — orphan blocks attached to neighboring leaves
+// are document-level data the user never typed and would silently disappear
+// if we wiped them on every unrelated edit. Foot writes go through
+// applyFootComment, called separately by the caller from DocComments.Foots.
 func applyOverrideComments(root *yaml.Node, segments []keySegment, head, line string) {
 	parent, slot, err := findParentSlot(root, segments)
 	if err != nil {
@@ -410,10 +511,8 @@ func applyOverrideComments(root *yaml.Node, segments []keySegment, head, line st
 
 		keyNode.HeadComment = ""
 		keyNode.LineComment = ""
-		keyNode.FootComment = ""
 		valNode.HeadComment = ""
 		valNode.LineComment = ""
-		valNode.FootComment = ""
 
 		headTarget = keyNode
 		lineTarget = valNode
@@ -421,7 +520,6 @@ func applyOverrideComments(root *yaml.Node, segments []keySegment, head, line st
 		item := parent.Content[slot]
 		item.HeadComment = ""
 		item.LineComment = ""
-		item.FootComment = ""
 
 		headTarget = item
 		lineTarget = item
@@ -438,14 +536,47 @@ func applyOverrideComments(root *yaml.Node, segments []keySegment, head, line st
 	}
 }
 
+// applyFootComment writes `foot` verbatim as FootComment on the value node
+// identified by segments (or the item node for sequences). Empty `foot` is a
+// no-op so callers can iterate a sparse map without pre-filtering. The text
+// is written raw — yaml.v3's encoder emits HeadComment/FootComment verbatim,
+// so the caller is responsible for "# "-prefixing each line. Use
+// formatHeadComment for cleaned input; pass through directly when round-tripping
+// raw text captured by parseOrphanComments.
+func applyFootComment(root *yaml.Node, segments []keySegment, foot string) {
+	if foot == "" {
+		return
+	}
+
+	parent, slot, err := findParentSlot(root, segments)
+	if err != nil {
+		return
+	}
+
+	switch parent.Kind {
+	case yaml.MappingNode:
+		parent.Content[slot].FootComment = foot
+	case yaml.SequenceNode:
+		parent.Content[slot].FootComment = foot
+	}
+}
+
 // formatHeadComment prefixes each line of a multi-line head comment with
-// "# ", producing the verbatim form yaml.v3 emits above the node.
+// "# ", producing the verbatim form yaml.v3 emits above the node. Empty
+// lines become "#" without the trailing space, matching idiomatic helm
+// values.yaml authoring (and what yaml.v3 itself produces on encode).
 func formatHeadComment(comment string) string {
 	var b strings.Builder
 
 	for i, line := range strings.Split(comment, "\n") {
 		if i > 0 {
 			b.WriteByte('\n')
+		}
+
+		if line == "" {
+			b.WriteByte('#')
+
+			continue
 		}
 
 		b.WriteString("# ")

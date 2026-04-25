@@ -201,12 +201,17 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 
 	col := &vc.State.Columns[colIdx]
 
-	var tree *yaml.Node
+	var (
+		tree *yaml.Node
+		docs service.DocComments
+	)
+
 	if col.CustomValues != nil {
 		tree = col.CustomValues.NodeTree
+		docs = col.DocCommentsForSave()
 	}
 
-	yamlText, err := state.OverridesToYAML(vc.State.Entries, col.OverrideEditors, col.YAMLIndent(), tree)
+	yamlText, err := state.OverridesToYAML(vc.State.Entries, col.OverrideEditors, col.YAMLIndent(), tree, docs)
 	if err != nil {
 		vc.NotifState.Show(err.Error(), state.NotificationError, time.Now())
 

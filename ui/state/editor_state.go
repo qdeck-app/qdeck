@@ -16,19 +16,25 @@ import (
 // did not edit. When tree is nil (no file loaded yet), the result is rebuilt
 // from scratch via FlatEntriesToYAML.
 //
-// Only entries with non-empty editor text are included. Section headers
-// (map/list) are skipped. indent controls the number of spaces per nesting
-// level in the output. Returns empty string with nil error when no overrides
-// are present.
+// Only entries with non-empty editor text are included. Section headers and
+// orphan-comment rows are skipped. indent controls the number of spaces per
+// nesting level in the output. docs carries doc-level orphan comments
+// (banner/trailer/per-leaf foots) so they round-trip on save — a zero
+// DocComments leaves the output without any banner or foot blocks. Returns
+// empty string with nil error when no overrides AND no doc comments are present.
 func OverridesToYAML(
-	entries []service.FlatValueEntry, editors []widget.Editor, indent int, tree *yaml.Node,
+	entries []service.FlatValueEntry,
+	editors []widget.Editor,
+	indent int,
+	tree *yaml.Node,
+	docs service.DocComments,
 ) (string, error) {
 	overrides := collectOverrides(entries, editors)
-	if len(overrides) == 0 {
+	if len(overrides) == 0 && docs.Head == "" && docs.Foot == "" && len(docs.Foots) == 0 {
 		return "", nil
 	}
 
-	yamlText, err := service.PatchNodeTree(tree, overrides, indent)
+	yamlText, err := service.PatchNodeTree(tree, overrides, indent, docs)
 	if err != nil {
 		return "", fmt.Errorf("overrides to YAML: %w", err)
 	}
@@ -50,7 +56,7 @@ func collectOverrides(entries []service.FlatValueEntry, editors []widget.Editor)
 			break
 		}
 
-		if StripYAMLComments(editors[i].Text()) != "" && !entries[i].IsSection() {
+		if StripYAMLComments(editors[i].Text()) != "" && entries[i].IsFocusable() {
 			count++
 		}
 	}
@@ -69,7 +75,7 @@ func collectOverrides(entries []service.FlatValueEntry, editors []widget.Editor)
 		raw := editors[i].Text()
 
 		val := StripYAMLComments(raw)
-		if val == "" || entry.IsSection() {
+		if val == "" || !entry.IsFocusable() {
 			continue
 		}
 
