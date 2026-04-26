@@ -1122,7 +1122,18 @@ func (t *OverrideTable) layoutEditorCell(gtx layout.Context, col, entryIdx int, 
 	ed := material.Editor(t.Theme, &editors[entryIdx], hint)
 	ed.TextSize = viewerEditorTextSize
 
+	// Force the editor to fill its allocated cell width. widget.Editor sizes
+	// its visible clip to gtx.Constraints.Constrain(textBoundingBox), so when
+	// text is narrower than the cell the editor's hit clip is narrower too —
+	// clicks in the empty horizontal space focus the row gesture but never
+	// reach the editor's own clicker, so the caret doesn't move and the user
+	// has to click again on real text. Multi-line rows make this routine on
+	// Windows because there's more vertical space where a click can land in a
+	// short line. Setting Min.X = Max.X expands the clip to the full column.
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+
 	edText := editors[entryIdx].Text()
+
 	if !strings.Contains(edText, "\n") {
 		return LayoutEditor(gtx, t.Theme.Shaper, ed)
 	}

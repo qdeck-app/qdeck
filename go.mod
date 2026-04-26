@@ -2,6 +2,16 @@ module github.com/qdeck-app/qdeck
 
 go 1.25.0
 
+// Local fork of gioui.org with a small patch to gesture.Click and
+// gesture.Hover (gesture/gesture.go). Upstream Gio locks the gesture's
+// internal pid to the first PointerID it ever sees and silently drops any
+// later Press whose PointerID differs. Windows reassigns mouse PointerIDs
+// across focus / EnableMouseInPointer events, which made clicks routinely
+// no-op (most visibly on multi-line override editors). The fork refreshes
+// pid on every Enter / Press so the gesture tracks whichever pointer is
+// currently interacting. Drop the replace once the fix lands upstream.
+replace gioui.org => ./third_party/gio
+
 require (
 	gioui.org v0.9.0
 	gioui.org/x v0.9.0

@@ -49,6 +49,16 @@ Workaround applied:
 
 - **Custom label/editor renderer** (`ui/widget/label.go`) with a 256-glyph buffer and integer pixel-grid snapping — all text must be rendered through `widget.LayoutLabel` / `widget.LayoutEditor`, never via Gio's `lbl.Layout(gtx)` directly
 
+### Vendored Gio (Windows click reliability)
+
+`third_party/gio/` holds a local fork of `gioui.org v0.9.0`. `go.mod` replaces the upstream import with this fork. The single-file patch is in [`third_party/gio-gesture-pid-windows-fix.patch`](third_party/gio-gesture-pid-windows-fix.patch).
+
+**Why:** upstream `gesture.Click` and `gesture.Hover` lock their internal `pid` field to the first `PointerID` they ever see — both refresh it only when `!c.hovered` / `!h.entered`. On Windows, Gio enables `EnableMouseInPointer(1)` (`app/os_windows.go`), which causes the OS to assign different `PointerID`s to the same physical mouse across focus changes, window leave/re-enter, and similar events. Once the gesture is "stuck" with a stale pid, every subsequent `Press` whose `PointerID` doesn't match is silently dropped (the `pid != e.PointerID` check breaks out before reaching `c.pressed = true` and the event return). Most visibly this made clicks no-op on multi-line override editors, where `widget.Editor`'s internal `clicker` (a `gesture.Click`) ate the press without positioning the caret.
+
+**Patch:** refresh `pid` on every `Enter` / `Press` / non-pressed `Leave` so the gesture tracks whichever pointer is currently interacting. ~10 changed lines, no behavioural change on macOS/Linux.
+
+**Removing the fork:** drop the `replace` directive in [`go.mod`](go.mod) and the `third_party/gio*` files once a fix lands upstream — see the corresponding issue/PR linked in the patch header. Bumping the Gio dependency requires re-applying the patch on top of the new release; the diff is small enough to re-do by hand.
+
 ## License
 
 Copyright © 2026 bosiakov

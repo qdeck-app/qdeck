@@ -150,6 +150,12 @@ linters:
     goconst:
       min-len: 2
       min-occurrences: 2
+    gomoddirectives:
+      # Allow the local Gio fork replacement. Patches gesture.Click /
+      # gesture.Hover pid handling — see go.mod for the full rationale.
+      replace-local: true
+      replace-allow-list:
+        - gioui.org
     lll:
       line-length: 140
     revive:
