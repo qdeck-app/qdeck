@@ -42,17 +42,6 @@ func (h *Hover) Add(ops *op.Ops) {
 }
 
 // Update state and report whether a pointer is inside the area.
-//
-// qdeck local patch: refresh h.pid on every Enter, not just the first.
-// Upstream code only set pid when !h.entered, so once a Hover saw an Enter
-// under PointerID X it was permanently locked to X — any later Enter from
-// PointerID Y was accepted (sets entered=true) but the recorded pid stayed
-// at X, and the matching Leave under Y could never reset entered because
-// `h.pid != e.PointerID`. Windows reassigns mouse PointerIDs across focus /
-// EnableMouseInPointer events, so the gesture would get stuck in a
-// permanent entered state with a stale pid. Always taking the latest
-// PointerID keeps the pair (entered, pid) in sync with what the OS is
-// currently reporting.
 func (h *Hover) Update(q input.Source) bool {
 	for {
 		ev, ok := q.Event(pointer.Filter{
@@ -72,6 +61,11 @@ func (h *Hover) Update(q input.Source) bool {
 				h.entered = false
 			}
 		case pointer.Enter:
+			// Always track the latest PointerID. The previous
+			// "if !h.entered" guard left the gesture stuck on the first
+			// ID it observed, which breaks on platforms that reassign
+			// PointerIDs within a single pointer's lifetime (e.g. Windows
+			// EnableMouseInPointer across focus / window-leave events).
 			h.pid = e.PointerID
 			h.entered = true
 		}
@@ -184,18 +178,6 @@ func (c *Click) Pressed() bool {
 }
 
 // Update state and return the next click events, if any.
-//
-// qdeck local patch: refresh c.pid on every Enter / Leave / Press, not just
-// the first one. Upstream code only updated pid when !c.hovered (Enter,
-// Leave) or !c.pressed (Press inside `if !c.hovered`), which made the
-// gesture sticky on the first PointerID it ever saw. On Windows with
-// EnableMouseInPointer, the OS assigns different PointerIDs to the same
-// mouse across focus changes / window leave / re-enter, and the gesture
-// would silently drop every subsequent Press because `c.pid != e.PointerID`.
-// Always taking the latest PointerID restores the original intent — track
-// whichever pointer is currently interacting — without breaking the
-// pressed/released bookkeeping (we still gate Release/Press transitions
-// on the pid recorded when the press began).
 func (c *Click) Update(q input.Source) (ClickEvent, bool) {
 	for {
 		evt, ok := q.Event(pointer.Filter{
@@ -241,6 +223,12 @@ func (c *Click) Update(q input.Source) (ClickEvent, bool) {
 			if e.Source == pointer.Mouse && e.Buttons != pointer.ButtonPrimary {
 				break
 			}
+			// Always take the press's PointerID. The previous
+			// "if !c.hovered" guard left the gesture stuck on the first
+			// ID it observed, silently dropping presses on platforms
+			// that reassign PointerIDs within a pointer's lifetime
+			// (e.g. Windows EnableMouseInPointer across focus /
+			// window-leave events).
 			c.pid = e.PointerID
 			c.pressed = true
 			if e.Time-c.clickedAt < doubleClickDuration {
@@ -253,8 +241,8 @@ func (c *Click) Update(q input.Source) (ClickEvent, bool) {
 		case pointer.Leave:
 			if !c.pressed {
 				c.pid = e.PointerID
-				c.hovered = false
-			} else if c.pid == e.PointerID {
+			}
+			if c.pid == e.PointerID {
 				c.hovered = false
 			}
 		case pointer.Enter:

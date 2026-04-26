@@ -1,0 +1,80 @@
+From 2ebc922c3b3514a623990fe8e76be277375aa243 Mon Sep 17 00:00:00 2001
+From: Eugene <eugenebosyakov@gmail.com>
+Date: Sun, 26 Apr 2026 19:07:45 +0300
+Subject: [PATCH] gesture: refresh PointerID on Press and Enter
+
+Click and Hover both stored the first PointerID they observed in
+their internal pid field and only updated it when not currently
+hovered/entered. Once the gesture became hovered, any later event
+under a different PointerID was effectively ignored: Click.Press
+fell through 'c.pid != e.PointerID' and was silently dropped, and
+Hover could never reset entered when the matching Leave arrived
+under a new ID.
+
+The Windows backend enables EnableMouseInPointer
+(app/os_windows.go), under which Windows reassigns the same
+physical mouse's PointerID across focus changes, window
+leave/re-enter, and similar events. Once a widget had been hovered,
+every subsequent press on it failed to register, including
+widget.Editor's internal clicker that positions the caret on press.
+Multi-line editors silently refused to move the caret on click
+after the window had received any focus event.
+
+Always take the latest PointerID on Hover.Enter and Click.Press.
+The Press/Release handshake still works because Press now records
+the press's own PointerID and Release continues to gate on
+'c.pid != e.PointerID' so an unrelated pointer's release can't end
+the press tracking.
+
+Signed-off-by: Eugene <eugenebosyakov@gmail.com>
+---
+ gesture/gesture.go | 26 ++++++++++++++------------
+ 1 file changed, 14 insertions(+), 12 deletions(-)
+
+diff --git a/gesture/gesture.go b/gesture/gesture.go
+index 356d7fa..d338dd4 100644
+--- a/gesture/gesture.go
++++ b/gesture/gesture.go
+@@ -61,12 +61,13 @@ func (h *Hover) Update(q input.Source) bool {
+ 				h.entered = false
+ 			}
+ 		case pointer.Enter:
+-			if !h.entered {
+-				h.pid = e.PointerID
+-			}
+-			if h.pid == e.PointerID {
+-				h.entered = true
+-			}
++			// Always track the latest PointerID. The previous
++			// "if !h.entered" guard left the gesture stuck on the first
++			// ID it observed, which breaks on platforms that reassign
++			// PointerIDs within a single pointer's lifetime (e.g. Windows
++			// EnableMouseInPointer across focus / window-leave events).
++			h.pid = e.PointerID
++			h.entered = true
+ 		}
+ 	}
+ 	return h.entered
+@@ -222,12 +223,13 @@ func (c *Click) Update(q input.Source) (ClickEvent, bool) {
+ 			if e.Source == pointer.Mouse && e.Buttons != pointer.ButtonPrimary {
+ 				break
+ 			}
+-			if !c.hovered {
+-				c.pid = e.PointerID
+-			}
+-			if c.pid != e.PointerID {
+-				break
+-			}
++			// Always take the press's PointerID. The previous
++			// "if !c.hovered" guard left the gesture stuck on the first
++			// ID it observed, silently dropping presses on platforms
++			// that reassign PointerIDs within a pointer's lifetime
++			// (e.g. Windows EnableMouseInPointer across focus /
++			// window-leave events).
++			c.pid = e.PointerID
+ 			c.pressed = true
+ 			if e.Time-c.clickedAt < doubleClickDuration {
+ 				c.clicks++
+-- 
+2.50.1.windows.1
+
