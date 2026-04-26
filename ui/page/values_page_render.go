@@ -209,6 +209,10 @@ func (p *ValuesPage) LayoutShortcutsHelp(gtx layout.Context) layout.Dimensions {
 		}),
 		layout.Rigid(layout.Spacer{Width: helpShortcutTrailGap}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return p.layoutLegendItem(gtx, theme.ColorCustomOnlyMarker, "override-only")
+		}),
+		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return p.layoutLegendItem(gtx, theme.ColorScrollMarker, "override")
 		}),
 		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
