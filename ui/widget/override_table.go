@@ -150,8 +150,15 @@ type OverrideTable struct {
 
 	// Per-anchor color cache, keyed by anchor name. Lazy-init on first miss
 	// inside anchorColor — keeps the layout hot path allocation-free after
-	// the first frame each anchor name is rendered.
+	// the first frame each anchor name is rendered. Cleared in Layout when
+	// DefaultAnchors swaps to a different map reference (i.e. a new chart),
+	// so anchor names from prior charts can't accumulate indefinitely.
 	anchorColorCache map[string]color.NRGBA
+
+	// prevDefaultAnchorsPtr is the map-identity pointer recorded on the last
+	// Layout pass; used to detect chart swaps that should invalidate the
+	// anchor color cache.
+	prevDefaultAnchorsPtr uintptr
 
 	// anchorMembershipScratch is the per-row collection buffer used by
 	// collectAnchorMemberships. Reused via [:0] so the row paint loop adds
@@ -339,6 +346,8 @@ func (t *OverrideTable) Layout(
 	t.ensureRightClickTargets(len(filteredIndices))
 
 	t.HoveredRow = overrideNoHover
+
+	t.invalidateAnchorColorCacheOnChartSwap()
 
 	t.handleDrag(gtx)
 	t.captureTableRootPointer(gtx)
@@ -580,22 +589,31 @@ func (t *OverrideTable) layoutRow(
 		gitStatus = t.gitChangeStatus(entries[entryIdx].Key)
 	}
 
+	// Custom-only marker (override-only entries with no defaults counterpart):
+	// painted first so subsequent tints — translucent hover/focus across the
+	// full row, opaque override/git tints on the right-panel only — composite
+	// on top instead of being clobbered. Sections take a horizontal gradient
+	// to call out a new subtree; leaves take a saturated bar at the row's
+	// left edge so an isolated new key still has a distinct visual anchor.
+	if entry.IsCustomOnly {
+		if section {
+			paintCustomOnlySectionGradient(gtx, dims.Size.Y, theme.ColorCustomOnlyMarker)
+		} else {
+			paintCustomOnlyLeafBar(gtx, dims.Size.Y, theme.ColorCustomOnlyMarker)
+		}
+	}
+
 	switch {
-	case section && entry.IsCustomOnly:
-		// Brand-new section that exists only in an override file: paint a
-		// horizontal lavender gradient that fades to transparent across the
-		// row, calling out the new subtree without obscuring downstream
-		// content (badges, focus tint stacked above).
-		paintCustomOnlySectionGradient(gtx, dims.Size.Y, theme.ColorCustomOnlyMarker)
 	case hasOverride:
-		// Override tint covers only the right side of the row — that's where
-		// the user's overridden value sits. Tinting the whole row would
-		// imply the key+default columns also changed, which they didn't.
+		// Override and git tints both describe a change in the user's file,
+		// not the chart defaults — so they cover only the right (override-
+		// editor) side of the row. Tinting the full row would imply the
+		// key+default columns also changed, which they didn't.
 		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.ColorOverride)
 	case gitStatus == domain.GitAdded:
-		paintRowBg(gtx, dims.Size.Y, theme.ColorGitAdded)
+		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.ColorGitAdded)
 	case gitStatus == domain.GitModified:
-		paintRowBg(gtx, dims.Size.Y, theme.ColorGitModified)
+		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.ColorGitModified)
 	case section && index == t.FocusedRow:
 		// Sections have no editable cells, so the per-column focus rect below
 		// doesn't fire. Paint a row-wide focus tint — same color as editable
@@ -620,6 +638,28 @@ func (t *OverrideTable) layoutRow(
 		rect.Pop()
 	}
 
+	// Anchor membership stripes on the row's left side, sitting at the indent
+	// column where each anchor's key text begins. A row inside multiple
+	// nested anchors gets one stripe per ancestor at that ancestor's own
+	// indent depth — the shallowest stripe is leftmost, deeper stripes
+	// appear further right at their own indent positions. Sections are
+	// included because an anchor can be defined on a mapping header
+	// (e.g. `master: &masterConfig`). Painted before content so the chevron
+	// triangle and key text overlay the stripe (otherwise a top-level anchor
+	// stripe would visually cut through the chevron).
+	t.anchorMembershipScratch = t.collectAnchorMemberships(entry.Key, t.anchorMembershipScratch[:0])
+	if len(t.anchorMembershipScratch) > 0 {
+		stripeW := gtx.Dp(anchorStripeWidth)
+		baseX := gtx.Dp(overridePaddingH)
+		levelW := gtx.Dp(overrideIndentPerLevel)
+
+		for _, m := range t.anchorMembershipScratch {
+			x := baseX + m.depth*levelW
+
+			paintAnchorStripe(gtx, x, stripeW, dims.Size.Y, t.anchorColor(m.name))
+		}
+	}
+
 	// Replay content.
 	c.Add(gtx.Ops)
 
@@ -634,26 +674,6 @@ func (t *OverrideTable) layoutRow(
 		}
 
 		paintGitIndicator(gtx, g.rightStart, dims.Size.Y, barColor)
-	}
-
-	// Anchor membership stripes on the row's left side, sitting at the indent
-	// column where each anchor's key text begins. A row inside multiple
-	// nested anchors gets one stripe per ancestor at that ancestor's own
-	// indent depth — the shallowest stripe is leftmost, deeper stripes
-	// appear further right at their own indent positions. Sections are
-	// included because an anchor can be defined on a mapping header
-	// (e.g. `master: &masterConfig`).
-	t.anchorMembershipScratch = t.collectAnchorMemberships(entry.Key, t.anchorMembershipScratch[:0])
-	if len(t.anchorMembershipScratch) > 0 {
-		stripeW := gtx.Dp(anchorStripeWidth)
-		baseX := gtx.Dp(overridePaddingH)
-		levelW := gtx.Dp(overrideIndentPerLevel)
-
-		for _, m := range t.anchorMembershipScratch {
-			x := baseX + m.depth*levelW
-
-			paintAnchorStripe(gtx, dims.Size.Y, x, stripeW, t.anchorColor(m.name))
-		}
 	}
 
 	return dims

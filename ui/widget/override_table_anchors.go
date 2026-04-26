@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"image"
 	"image/color"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -142,29 +143,40 @@ func findAnchoredAncestor(anchors map[string]service.AnchorInfo, key string) (st
 
 // anchorMembership records one anchor a row participates in via its flat key.
 // depth is the number of dotted segments before the leaf in the ancestor key,
-// used to order stripes outer-to-inner along the row's right edge.
+// used to order stripes outer-to-inner along the row's right edge. source is
+// -1 for the chart-defaults anchor map and the column index otherwise; it
+// scopes dedup so two files that happen to use the same anchor name (`&defaults`
+// in chart defaults and a separate `&defaults` in an override file) don't
+// collapse into one stripe at a non-deterministic depth.
 type anchorMembership struct {
-	name  string
-	depth int
+	name   string
+	depth  int
+	source int
 }
+
+// anchorMembershipSourceDefaults is the source value for memberships drawn
+// from t.DefaultAnchors; column-sourced memberships use the column index.
+const anchorMembershipSourceDefaults = -1
 
 // collectAnchorMemberships gathers every anchor (and alias-target) the row's
 // flat key sits inside, across the chart defaults and every active override
 // column's anchor map. Reuses the caller's slice (pass `out[:0]`) so the
-// per-row layout path stays allocation-free. Result is deduped by anchor name
-// and sorted by depth ascending — the shallowest ancestor is returned first
-// so the caller can place outer anchors at the rightmost edge and stack
-// inner anchors inward.
+// per-row layout path stays allocation-free. Result is deduped per
+// (source, name) and sorted by depth ascending — the shallowest ancestor is
+// returned first so the caller can place outer anchors at the rightmost edge
+// and stack inner anchors inward.
 func (t *OverrideTable) collectAnchorMemberships(key string, out []anchorMembership) []anchorMembership {
-	out = appendAnchorMemberships(out, t.DefaultAnchors, key)
+	out = appendAnchorMemberships(out, t.DefaultAnchors, key, anchorMembershipSourceDefaults)
 
-	for c := range t.ColumnCount {
-		out = appendAnchorMemberships(out, t.columnAnchors(c), key)
+	for c := range t.colCount() {
+		out = appendAnchorMemberships(out, t.columnAnchors(c), key, c)
 	}
 
-	slices.SortFunc(out, func(a, b anchorMembership) int {
-		return cmp.Compare(a.depth, b.depth)
-	})
+	if len(out) > 1 {
+		slices.SortFunc(out, func(a, b anchorMembership) int {
+			return cmp.Compare(a.depth, b.depth)
+		})
+	}
 
 	return out
 }
@@ -173,42 +185,48 @@ func (t *OverrideTable) collectAnchorMemberships(key string, out []anchorMembers
 // key is the row key itself or a dotted prefix of it. Both anchor definitions
 // and alias usages contribute — an alias contributes its target anchor's name
 // so members of `&defaults` and members under `*defaults` share one stripe.
-// Duplicate names (the same anchor seen via multiple columns or via both an
-// anchor definition and an alias) are filtered.
+// Dedup is per (source, name) so cross-file name collisions don't shadow each
+// other. Anchor definitions are processed before aliases so a file that has
+// both contributes the anchor's depth deterministically (map iteration order
+// is otherwise unspecified).
 func appendAnchorMemberships(
 	out []anchorMembership,
 	anchors map[string]service.AnchorInfo,
 	key string,
+	source int,
 ) []anchorMembership {
 	if len(anchors) == 0 {
 		return out
 	}
 
-	for k, info := range anchors {
-		if info.Role != service.AnchorRoleAnchor && info.Role != service.AnchorRoleAlias {
-			continue
-		}
+	for _, role := range [2]service.AnchorRole{service.AnchorRoleAnchor, service.AnchorRoleAlias} {
+		for k, info := range anchors {
+			if info.Role != role {
+				continue
+			}
 
-		if !isDescendantKey(k, key) {
-			continue
-		}
+			if !isDescendantKey(k, key) {
+				continue
+			}
 
-		if containsAnchorName(out, info.Name) {
-			continue
-		}
+			if containsAnchorMembership(out, source, info.Name) {
+				continue
+			}
 
-		out = append(out, anchorMembership{
-			name:  info.Name,
-			depth: strings.Count(k, "."),
-		})
+			out = append(out, anchorMembership{
+				name:   info.Name,
+				depth:  strings.Count(k, "."),
+				source: source,
+			})
+		}
 	}
 
 	return out
 }
 
-func containsAnchorName(memberships []anchorMembership, name string) bool {
+func containsAnchorMembership(memberships []anchorMembership, source int, name string) bool {
 	for i := range memberships {
-		if memberships[i].name == name {
+		if memberships[i].source == source && memberships[i].name == name {
 			return true
 		}
 	}
@@ -231,6 +249,26 @@ func (t *OverrideTable) anchorColor(name string) color.NRGBA {
 	t.anchorColorCache[name] = c
 
 	return c
+}
+
+// invalidateAnchorColorCacheOnChartSwap clears anchorColorCache when the
+// DefaultAnchors map identity changes between frames. New chart load swaps
+// the underlying map; without this the cache would accumulate names from
+// every chart visited in the session. Map identity is read via reflect — Go
+// has no direct == on maps, but reflect.Value.Pointer() exposes the header
+// pointer which is exactly the equality check we want.
+func (t *OverrideTable) invalidateAnchorColorCacheOnChartSwap() {
+	var ptr uintptr
+	if t.DefaultAnchors != nil {
+		ptr = reflect.ValueOf(t.DefaultAnchors).Pointer()
+	}
+
+	if ptr == t.prevDefaultAnchorsPtr {
+		return
+	}
+
+	t.prevDefaultAnchorsPtr = ptr
+	t.anchorColorCache = nil
 }
 
 func indexOfEntry(entries []service.FlatValueEntry, key string) int {
@@ -324,7 +362,6 @@ func (t *OverrideTable) layoutAnchorBadge(
 	// and the sigil already disambiguates role. Splitting saturation between
 	// the two roles broke the "same color = same anchor" read at a glance.
 	bg := t.anchorColor(info.Name)
-	fg := theme.ColorWhite
 
 	clickable := click != nil && t.badgeHandler(info.Role) != nil
 	if clickable {
@@ -351,7 +388,7 @@ func (t *OverrideTable) layoutAnchorBadge(
 	}
 
 	lbl := material.Caption(t.Theme, sigil+info.Name)
-	lbl.Color = fg
+	lbl.Color = theme.ColorWhite
 	lbl.MaxLines = 1
 
 	gap := gtx.Dp(overrideBadgeGap)

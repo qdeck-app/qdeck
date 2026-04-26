@@ -73,8 +73,7 @@ const customOnlyGradientFade = 0.10
 // content.
 func paintCustomOnlySectionGradient(gtx layout.Context, height int, c color.NRGBA) {
 	w := gtx.Constraints.Max.X
-
-	defer clip.Rect{Max: image.Pt(w, height)}.Push(gtx.Ops).Pop()
+	rect := clip.Rect{Max: image.Pt(w, height)}.Push(gtx.Ops)
 
 	fadeEnd := float32(w) * customOnlyGradientFade
 
@@ -85,6 +84,21 @@ func paintCustomOnlySectionGradient(gtx layout.Context, height int, c color.NRGB
 		Color2: theme.ColorWhite,
 	}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
+	rect.Pop()
+}
+
+const customOnlyLeafBarWidth = 4
+
+// paintCustomOnlyLeafBar draws a saturated vertical bar on the row's left
+// edge marking a leaf key that exists only in an override file. Sections
+// with the same status take the wider gradient instead — together they
+// cover the legend's "override-only" entry on every affected row.
+func paintCustomOnlyLeafBar(gtx layout.Context, height int, c color.NRGBA) {
+	w := gtx.Dp(customOnlyLeafBarWidth)
+	rect := clip.Rect{Max: image.Pt(w, height)}.Push(gtx.Ops)
+	paint.ColorOp{Color: c}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	rect.Pop()
 }
 
 const anchorStripeWidth = 3
@@ -94,7 +108,7 @@ const anchorStripeWidth = 3
 // anchor's nesting depth so the stripe lines up with the indent column where
 // the anchor's key text begins; nested anchors produce stacked vertical bars
 // at the indent levels of the rows where they were defined.
-func paintAnchorStripe(gtx layout.Context, height, x, width int, c color.NRGBA) {
+func paintAnchorStripe(gtx layout.Context, x, width, height int, c color.NRGBA) {
 	rect := clip.Rect{Min: image.Pt(x, 0), Max: image.Pt(x+width, height)}.Push(gtx.Ops)
 	paint.ColorOp{Color: c}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)

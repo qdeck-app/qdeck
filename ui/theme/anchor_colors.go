@@ -36,6 +36,12 @@ func AnchorColor(name string) color.NRGBA {
 // hueFromName maps a string to a hue in [0, 360) using FNV-1a, then rotates it
 // out of the forbidden bands around git-indicator hues so anchor stripes can't
 // be confused with git status. Pure, allocation-free.
+//
+// Invariant: anchorHueRotation must exceed every forbidden band's full width
+// (2 × anchorForbiddenHalfBand) AND each rotation must land outside every
+// other forbidden band. With the current bands (120°, 215°) separated by
+// 95° and rotation 30°, a single pass clears both. If a new band is added
+// or rotation is reduced, replace the single rotation with a re-check loop.
 func hueFromName(name string) float64 {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(name))
