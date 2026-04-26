@@ -1,7 +1,11 @@
 package widget
 
 import (
+	"cmp"
 	"image"
+	"image/color"
+	"reflect"
+	"slices"
 	"strings"
 
 	"gioui.org/gesture"
@@ -84,19 +88,23 @@ func (t *OverrideTable) propagateAnchoredValueEdit(
 	}
 }
 
-// findAnchoredAncestor returns the flat key of the nearest ancestor (or the
-// key itself) annotated with role=Anchor in anchors, along with the anchor
-// name. Returns ("", "") when no anchored ancestor is found.
-func findAnchoredAncestor(anchors map[string]service.AnchorInfo, key string) (string, string) {
+// findAncestorByRole returns the deepest entry in anchors whose flat key is
+// either key itself or a prefix of key, restricted to entries with the given
+// role. Returns ("", "") when no ancestor in that role is found.
+func findAncestorByRole(
+	anchors map[string]service.AnchorInfo,
+	key string,
+	role service.AnchorRole,
+) (string, string) {
 	bestKey := ""
 	bestName := ""
 
 	for k, info := range anchors {
-		if info.Role != service.AnchorRoleAnchor {
+		if info.Role != role {
 			continue
 		}
 
-		if k == key || strings.HasPrefix(key, k+".") {
+		if isDescendantKey(k, key) {
 			if len(k) > len(bestKey) {
 				bestKey = k
 				bestName = info.Name
@@ -105,6 +113,162 @@ func findAnchoredAncestor(anchors map[string]service.AnchorInfo, key string) (st
 	}
 
 	return bestKey, bestName
+}
+
+// isDescendantKey reports whether key equals parent or is nested under it in
+// flat-key notation, treating both `.` (map fields) and `[` (sequence indices)
+// as legal child separators. Without the `[` case, an alias on a sequence
+// (`readOnlyMethods: *methods`) would mark only the header row, leaving the
+// `readOnlyMethods[0..n]` element rows excluded from the anchor's scope.
+func isDescendantKey(parent, key string) bool {
+	if parent == key {
+		return true
+	}
+
+	if !strings.HasPrefix(key, parent) {
+		return false
+	}
+
+	rest := key[len(parent):]
+
+	return rest != "" && (rest[0] == '.' || rest[0] == '[')
+}
+
+// findAnchoredAncestor returns the flat key of the nearest ancestor (or the
+// key itself) annotated with role=Anchor in anchors, along with the anchor
+// name. Returns ("", "") when no anchored ancestor is found.
+func findAnchoredAncestor(anchors map[string]service.AnchorInfo, key string) (string, string) {
+	return findAncestorByRole(anchors, key, service.AnchorRoleAnchor)
+}
+
+// anchorMembership records one anchor a row participates in via its flat key.
+// depth is the number of dotted segments before the leaf in the ancestor key,
+// used to order stripes outer-to-inner along the row's right edge. source is
+// -1 for the chart-defaults anchor map and the column index otherwise; it
+// scopes dedup so two files that happen to use the same anchor name (`&defaults`
+// in chart defaults and a separate `&defaults` in an override file) don't
+// collapse into one stripe at a non-deterministic depth.
+type anchorMembership struct {
+	name   string
+	depth  int
+	source int
+}
+
+// anchorMembershipSourceDefaults is the source value for memberships drawn
+// from t.DefaultAnchors; column-sourced memberships use the column index.
+const anchorMembershipSourceDefaults = -1
+
+// collectAnchorMemberships gathers every anchor (and alias-target) the row's
+// flat key sits inside, across the chart defaults and every active override
+// column's anchor map. Reuses the caller's slice (pass `out[:0]`) so the
+// per-row layout path stays allocation-free. Result is deduped per
+// (source, name) and sorted by depth ascending — the shallowest ancestor is
+// returned first so the caller can place outer anchors at the rightmost edge
+// and stack inner anchors inward.
+func (t *OverrideTable) collectAnchorMemberships(key string, out []anchorMembership) []anchorMembership {
+	out = appendAnchorMemberships(out, t.DefaultAnchors, key, anchorMembershipSourceDefaults)
+
+	for c := range t.colCount() {
+		out = appendAnchorMemberships(out, t.columnAnchors(c), key, c)
+	}
+
+	if len(out) > 1 {
+		slices.SortFunc(out, func(a, b anchorMembership) int {
+			return cmp.Compare(a.depth, b.depth)
+		})
+	}
+
+	return out
+}
+
+// appendAnchorMemberships walks one anchor map and appends every entry whose
+// key is the row key itself or a dotted prefix of it. Both anchor definitions
+// and alias usages contribute — an alias contributes its target anchor's name
+// so members of `&defaults` and members under `*defaults` share one stripe.
+// Dedup is per (source, name) so cross-file name collisions don't shadow each
+// other. Anchor definitions are processed before aliases so a file that has
+// both contributes the anchor's depth deterministically (map iteration order
+// is otherwise unspecified).
+func appendAnchorMemberships(
+	out []anchorMembership,
+	anchors map[string]service.AnchorInfo,
+	key string,
+	source int,
+) []anchorMembership {
+	if len(anchors) == 0 {
+		return out
+	}
+
+	for _, role := range [2]service.AnchorRole{service.AnchorRoleAnchor, service.AnchorRoleAlias} {
+		for k, info := range anchors {
+			if info.Role != role {
+				continue
+			}
+
+			if !isDescendantKey(k, key) {
+				continue
+			}
+
+			if containsAnchorMembership(out, source, info.Name) {
+				continue
+			}
+
+			out = append(out, anchorMembership{
+				name:   info.Name,
+				depth:  strings.Count(k, "."),
+				source: source,
+			})
+		}
+	}
+
+	return out
+}
+
+func containsAnchorMembership(memberships []anchorMembership, source int, name string) bool {
+	for i := range memberships {
+		if memberships[i].source == source && memberships[i].name == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// anchorColor returns the per-anchor hue for name, lazily caching the result
+// on the table so subsequent frames are pure map lookups.
+func (t *OverrideTable) anchorColor(name string) color.NRGBA {
+	if c, ok := t.anchorColorCache[name]; ok {
+		return c
+	}
+
+	if t.anchorColorCache == nil {
+		t.anchorColorCache = make(map[string]color.NRGBA)
+	}
+
+	c := theme.AnchorColor(name)
+	t.anchorColorCache[name] = c
+
+	return c
+}
+
+// invalidateAnchorColorCacheOnChartSwap clears anchorColorCache when the
+// DefaultAnchors map identity changes between frames. New chart load swaps
+// the underlying map; without this the cache would accumulate names from
+// every chart visited in the session. Map identity is read via reflect — Go
+// has no direct == on maps, but reflect.Value.Pointer() exposes the header
+// pointer which is exactly the equality check we want.
+func (t *OverrideTable) invalidateAnchorColorCacheOnChartSwap() {
+	var ptr uintptr
+	if t.DefaultAnchors != nil {
+		ptr = reflect.ValueOf(t.DefaultAnchors).Pointer()
+	}
+
+	if ptr == t.prevDefaultAnchorsPtr {
+		return
+	}
+
+	t.prevDefaultAnchorsPtr = ptr
+	t.anchorColorCache = nil
 }
 
 func indexOfEntry(entries []service.FlatValueEntry, key string) int {
@@ -183,21 +347,21 @@ func (t *OverrideTable) layoutAnchorBadge(
 		return layout.Dimensions{}
 	}
 
-	var (
-		sigil string
-		bg    = theme.ColorAccent
-	)
+	var sigil string
 
 	switch info.Role {
 	case service.AnchorRoleAnchor:
 		sigil = "&"
-		bg = theme.ColorStatsAdded
 	case service.AnchorRoleAlias:
 		sigil = "*"
-		bg = theme.ColorAccent
 	case service.AnchorRoleNone:
 		return layout.Dimensions{}
 	}
+
+	// Anchor and alias share the same hue — they belong to one anchor family,
+	// and the sigil already disambiguates role. Splitting saturation between
+	// the two roles broke the "same color = same anchor" read at a glance.
+	bg := t.anchorColor(info.Name)
 
 	clickable := click != nil && t.badgeHandler(info.Role) != nil
 	if clickable {

@@ -510,10 +510,11 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 			}
 
 			customOnly[e.Key] = service.FlatValueEntry{
-				Key:     e.Key,
-				Type:    e.Type,
-				Depth:   e.Depth,
-				Comment: e.Comment,
+				Key:          e.Key,
+				Type:         e.Type,
+				Depth:        e.Depth,
+				Comment:      e.Comment,
+				IsCustomOnly: true,
 			}
 		}
 	}

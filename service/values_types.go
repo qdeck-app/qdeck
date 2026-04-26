@@ -91,6 +91,12 @@ type FlatValueEntry struct {
 	// `valNode.FootComment`. Empty when the comment is the file's banner or
 	// trailer (those round-trip via FlatValues.DocHeadComment/DocFootComment).
 	FootAfterKey string
+
+	// IsCustomOnly is true when this entry exists only in an override file
+	// with no defaults counterpart. Set during ValuesPageState.RebuildUnifiedEntries
+	// so the table can paint these rows with a distinct background — they
+	// introduce a new key rather than overriding an existing chart default.
+	IsCustomOnly bool
 }
 
 // IsSection returns true for entries that are section headers (non-leaf map/list nodes).

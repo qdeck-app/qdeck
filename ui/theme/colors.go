@@ -19,8 +19,8 @@ var (
 	ColorSeparator     = color.NRGBA{R: 230, G: 230, B: 230, A: 255}
 	ColorTreeGuide     = color.NRGBA{R: 210, G: 210, B: 210, A: 255}
 	ColorIndentTick    = color.NRGBA{R: 195, G: 195, B: 195, A: 255}
-	ColorOverride      = color.NRGBA{R: 255, G: 255, B: 200, A: 255}
-	ColorScrollMarker  = color.NRGBA{R: 200, G: 170, B: 50, A: 200}
+	ColorOverride      = color.NRGBA{R: 255, G: 240, B: 205, A: 255}
+	ColorScrollMarker  = color.NRGBA{R: 215, G: 145, B: 40, A: 220}
 	ColorDropdownBg    = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 	ColorBtnCancel     = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
 	ColorInputBorder   = color.NRGBA{R: 200, G: 200, B: 200, A: 255}
@@ -31,6 +31,12 @@ var (
 	// Custom window decoration button colors (dark toolbar style).
 	ColorContrastBg = color.NRGBA{R: 80, G: 80, B: 85, A: 255}
 	ColorContrastFg = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+
+	// Override-only marker: saturated lavender used both for the left-edge
+	// row bar and the legend square that flags entries (including new
+	// sections) which exist only in an override file with no chart-defaults
+	// counterpart.
+	ColorCustomOnlyMarker = color.NRGBA{R: 145, G: 100, B: 195, A: 220}
 
 	// Git change highlights for values table (pastel row backgrounds).
 	ColorGitAdded    = color.NRGBA{R: 200, G: 235, B: 200, A: 255}
