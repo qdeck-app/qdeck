@@ -13,5 +13,5 @@ third_party/gio/** text eol=lf
 third_party/gio/** linguist-vendored=true
 third_party/gio/** -diff
 
-# The patch file itself stays diffable so reviewers can see what changed.
-third_party/gio-gesture-pid-windows-fix.patch text eol=lf
+# The patch file stays diffable so reviewers can see what changed.
+third_party/*.patch text eol=lf

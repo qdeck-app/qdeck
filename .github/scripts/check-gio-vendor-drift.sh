@@ -16,7 +16,7 @@
 set -euo pipefail
 
 GIO_VERSION="v0.9.0"
-PATCH_FILE="third_party/gio-gesture-pid-windows-fix.patch"
+PATCH_FILE="third_party/0001-gesture-refresh-PointerID-on-Press-and-Enter.patch"
 VENDOR_DIR="third_party/gio"
 PROXY_URL="https://proxy.golang.org/gioui.org/@v/${GIO_VERSION}.zip"
 
