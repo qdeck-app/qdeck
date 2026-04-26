@@ -17,6 +17,10 @@ formatters:
         - prefix(github.com/qdeck-app/qdeck)
     gofumpt:
       module-path: github.com/qdeck-app/qdeck
+  exclusions:
+    paths:
+      # Vendored Gio fork — leave upstream formatting alone.
+      - third_party/gio
 
 linters:
   enable:
@@ -180,6 +184,9 @@ linters:
         - BUG
         - FIXME
   exclusions:
+    paths:
+      # Vendored Gio fork — leave upstream code alone.
+      - third_party/gio
     rules:
       # SVG path coordinates are inherently numeric literals with no meaningful constant names.
       - path: ui/widget/vscode_icon\.go
