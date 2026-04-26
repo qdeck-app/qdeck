@@ -23,6 +23,12 @@ jobs:
         run: go mod verify
       - name: Go Tidy
         run: go mod tidy && git diff --exit-code
+      - name: Vendored Gio drift check
+        # Confirms third_party/gio/ is upstream Gio at the pinned version
+        # plus our .patch — nothing more, nothing less. Fails the build if
+        # someone hand-edits a vendored file without updating the patch (or
+        # changes the patch without re-rolling the vendor tree).
+        run: .github/scripts/check-gio-vendor-drift.sh
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:

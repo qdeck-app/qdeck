@@ -1,0 +1,17 @@
+# Vendored Gio fork (third_party/gio/) — see README "Vendored Gio" + the
+# patch at third_party/gio-gesture-pid-windows-fix.patch.
+#
+# - text eol=lf    : keep upstream Unix line endings regardless of the
+#                    contributor's core.autocrlf setting. CRLF would break
+#                    `git apply` of the .patch and create churn diffs.
+# - linguist-vendored=true : don't count the vendored tree in GitHub's
+#                    language stats and exclude from blame views.
+# - -diff          : suppress the 2.5 MB of diff hunks vendored code would
+#                    otherwise produce in `git diff`. Use `git diff --text`
+#                    when you genuinely need to see the content.
+third_party/gio/** text eol=lf
+third_party/gio/** linguist-vendored=true
+third_party/gio/** -diff
+
+# The patch file itself stays diffable so reviewers can see what changed.
+third_party/gio-gesture-pid-windows-fix.patch text eol=lf

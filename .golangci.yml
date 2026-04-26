@@ -17,6 +17,10 @@ formatters:
         - prefix(github.com/qdeck-app/qdeck)
     gofumpt:
       module-path: github.com/qdeck-app/qdeck
+  exclusions:
+    paths:
+      # Vendored Gio fork — leave upstream formatting alone.
+      - third_party/gio
 
 linters:
   enable:
@@ -150,6 +154,12 @@ linters:
     goconst:
       min-len: 2
       min-occurrences: 2
+    gomoddirectives:
+      # Allow the local Gio fork replacement. Patches gesture.Click /
+      # gesture.Hover pid handling — see go.mod for the full rationale.
+      replace-local: true
+      replace-allow-list:
+        - gioui.org
     lll:
       line-length: 140
     revive:
@@ -174,6 +184,9 @@ linters:
         - BUG
         - FIXME
   exclusions:
+    paths:
+      # Vendored Gio fork — leave upstream code alone.
+      - third_party/gio
     rules:
       # SVG path coordinates are inherently numeric literals with no meaningful constant names.
       - path: ui/widget/vscode_icon\.go
