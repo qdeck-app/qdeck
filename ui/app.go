@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -267,7 +266,15 @@ func (a *Application) pollExternalEvents() {
 	}
 }
 
-func pollRunner[T any](runner *async.Runner[T], loading *bool, notif *state.NotificationState, onSuccess func(T)) {
+// pollRunner drains one result from runner and applies it. When errSlot is
+// non-nil, the error message is also written into it on failure (cleared on
+// success) so the page can render a persistent error after the transient
+// notification fades — used by the values-loading runners since their failure
+// state otherwise looks identical to "no chart selected".
+func pollRunner[T any](
+	runner *async.Runner[T], loading *bool, errSlot *string,
+	notif *state.NotificationState, onSuccess func(T),
+) {
 	res, ok := runner.Poll()
 	if !ok {
 		return
@@ -275,35 +282,30 @@ func pollRunner[T any](runner *async.Runner[T], loading *bool, notif *state.Noti
 
 	*loading = false
 
-	if res.Err != nil {
-		msg := res.Err.Error()
-		if errors.Is(res.Err, context.DeadlineExceeded) {
-			msg = "Operation timed out: " + msg
-		}
+	state.RecordLoadOutcome(res.Err, errSlot, notif)
 
-		notif.Show(msg, state.NotificationError, time.Now())
-	} else {
+	if res.Err == nil {
 		onSuccess(res.Value)
 	}
 }
 
 func (a *Application) pollAsyncResults() {
-	pollRunner(a.repoListRunner, &a.repoState.Loading, &a.notificationState, func(v []domain.HelmRepository) {
+	pollRunner(a.repoListRunner, &a.repoState.Loading, nil, &a.notificationState, func(v []domain.HelmRepository) {
 		a.repoState.Repos = v
 		a.preloadCharts(v)
 	})
 
-	pollRunner(a.chartListRunner, &a.chartState.Loading, &a.notificationState, func(v []domain.Chart) {
+	pollRunner(a.chartListRunner, &a.chartState.Loading, nil, &a.notificationState, func(v []domain.Chart) {
 		a.chartState.Charts = v
 		a.chartState.BuildChartSearchCache()
 	})
 
-	pollRunner(a.versionListRunner, &a.chartState.Loading, &a.notificationState, func(v []domain.ChartVersion) {
+	pollRunner(a.versionListRunner, &a.chartState.Loading, nil, &a.notificationState, func(v []domain.ChartVersion) {
 		a.chartState.Versions = v
 		a.chartState.BuildVersionSearchCache()
 	})
 
-	pollRunner(a.pullChartRunner, &a.valuesState.Loading, &a.notificationState, func(v string) {
+	pollRunner(a.pullChartRunner, &a.valuesState.Loading, &a.valuesState.LoadError, &a.notificationState, func(v string) {
 		a.valuesState.ChartPath = v
 		a.valuesState.ChartName = a.navState.SelectedChart
 		a.valuesState.RepoName = a.navState.SelectedRepo
@@ -314,17 +316,17 @@ func (a *Application) pollAsyncResults() {
 	})
 
 	// Local chart loading
-	pollRunner(a.localChartRunner, &a.valuesState.Loading, &a.notificationState, a.applyLocalChartResult)
+	pollRunner(a.localChartRunner, &a.valuesState.Loading, &a.valuesState.LoadError, &a.notificationState, a.applyLocalChartResult)
 
 	// OCI chart loading
-	pollRunner(a.ociChartRunner, &a.valuesState.Loading, &a.notificationState, a.applyOCIChartResult)
+	pollRunner(a.ociChartRunner, &a.valuesState.Loading, &a.valuesState.LoadError, &a.notificationState, a.applyOCIChartResult)
 
 	// Recent charts
-	pollRunner(a.recentChartsRunner, &a.repoState.Loading, &a.notificationState, func(v []domain.RecentChart) {
+	pollRunner(a.recentChartsRunner, &a.repoState.Loading, nil, &a.notificationState, func(v []domain.RecentChart) {
 		a.repoState.RecentCharts = v
 	})
 
-	pollRunner(a.recentValuesEntriesRunner, &a.repoState.Loading, &a.notificationState, func(v []domain.RecentValuesEntry) {
+	pollRunner(a.recentValuesEntriesRunner, &a.repoState.Loading, nil, &a.notificationState, func(v []domain.RecentValuesEntry) {
 		a.repoState.RecentValuesEntries = v
 	})
 

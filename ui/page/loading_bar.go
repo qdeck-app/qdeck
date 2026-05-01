@@ -24,6 +24,8 @@ const (
 
 const loadingIndicatorFraction float32 = 0.3
 
+const errorDetailMaxLines = 8
+
 const (
 	pingPongMidpoint float32 = 0.5
 	pingPongScale    float32 = 2
@@ -41,6 +43,30 @@ func layoutCenteredLoading(gtx layout.Context, th *material.Theme) layout.Dimens
 			}),
 			layout.Rigid(layout.Spacer{Height: loadingBarSpacing}.Layout),
 			layout.Rigid(layoutLoadingBar),
+		)
+	})
+}
+
+// layoutCenteredError renders a centred title-over-detail empty state for failed async loads.
+func layoutCenteredError(gtx layout.Context, th *material.Theme, title, detail string) layout.Dimensions {
+	gtx.Constraints.Min = gtx.Constraints.Max
+
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Body1(th, title)
+				lbl.Color = theme.Default.Danger
+
+				return customwidget.LayoutLabel(gtx, lbl)
+			}),
+			layout.Rigid(layout.Spacer{Height: loadingBarSpacing}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Body2(th, detail)
+				lbl.Color = theme.Default.Ink2
+				lbl.MaxLines = errorDetailMaxLines
+
+				return customwidget.LayoutLabel(gtx, lbl)
+			}),
 		)
 	})
 }

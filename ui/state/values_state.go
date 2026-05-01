@@ -205,6 +205,14 @@ type ValuesPageState struct {
 	Version             string
 	Loading             bool
 
+	// LoadError is the message from the most recent failed chart-pull or
+	// default-values load. Cleared on success and on ResetState. The values
+	// page renders this in the empty-state branch so a failed load is visible
+	// after the transient error toast fades. Why: previously a failure left
+	// the page on "No chart selected", which was misleading because the user
+	// had selected a chart.
+	LoadError string
+
 	// Entries is the unified, UI-facing entry list: chart defaults merged with
 	// any keys found only in custom files loaded into active columns. All
 	// layout, filtering, collapse, save, and render code reads from here
