@@ -28,8 +28,11 @@ key: value
 `
 
 	tree, docs := loadTreeAndDocs(t, src)
+
+	const fixtureKey = "key"
+
 	entries := []OverrideEntry{
-		{Key: "key", Value: "value", Type: "string", HeadComment: "Banner line one\nBanner line two"},
+		{Key: fixtureKey, Value: "value", Type: typeString, HeadComment: "Banner line one\nBanner line two"},
 	}
 
 	got, err := PatchNodeTree(tree, entries, DefaultYAMLIndent, docs)
@@ -45,7 +48,7 @@ key: value
 		t.Fatalf("output missing second banner line:\n%s", got)
 	}
 
-	if !strings.Contains(got, "key: value") {
+	if !strings.Contains(got, fixtureKey+": value") {
 		t.Fatalf("entry missing:\n%s", got)
 	}
 }
@@ -68,10 +71,12 @@ keep: original
 	tree, docs := loadTreeAndDocs(t, src)
 
 	// Edit only `keep`, leaving auth.password (and its foot) untouched.
+	const fixtureEdited = "edited"
+
 	entries := []OverrideEntry{
-		{Key: "auth.enabled", Value: "true", Type: "bool"},
-		{Key: "auth.password", Value: "secret", Type: "string"},
-		{Key: "keep", Value: "edited", Type: "string"},
+		{Key: "auth.enabled", Value: yamlTrueLiteral, Type: typeBool},
+		{Key: "auth.password", Value: "secret", Type: typeString},
+		{Key: "keep", Value: fixtureEdited, Type: typeString},
 	}
 
 	got, err := PatchNodeTree(tree, entries, DefaultYAMLIndent, docs)
@@ -83,7 +88,7 @@ keep: original
 		t.Fatalf("foot comment dropped on unrelated edit:\n%s", got)
 	}
 
-	if !strings.Contains(got, "edited") {
+	if !strings.Contains(got, fixtureEdited) {
 		t.Fatalf("edited value missing:\n%s", got)
 	}
 }
@@ -102,9 +107,11 @@ other: x
 
 	tree, docs := loadTreeAndDocs(t, src)
 
+	const fixtureEdited2 = "edited"
+
 	entries := []OverrideEntry{
-		{Key: "key", Value: "edited", Type: "string"},
-		{Key: "other", Value: "x", Type: "string"},
+		{Key: "key", Value: fixtureEdited2, Type: typeString},
+		{Key: "other", Value: "x", Type: typeString},
 	}
 
 	got, err := PatchNodeTree(tree, entries, DefaultYAMLIndent, docs)

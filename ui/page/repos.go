@@ -213,12 +213,16 @@ func (p *ReposPage) recordValuesSectionMinY() {
 
 // layoutChartsSection renders the "Charts" header, compact drop zone, direct link input, and recent chart items.
 //
+// tabKeyHint is the keyboard hint label rendered next to Repos-page section
+// headers; declared once so goconst doesn't flag the four call sites.
+const tabKeyHint = "Tab"
+
 //nolint:dupl // same Gio flex pattern as layoutRepositoriesSection but entirely different children
 func (p *ReposPage) layoutChartsSection(gtx layout.Context) layout.Dimensions {
 	return layoutSectionCard(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutSectionHeaderWithHint(gtx, p.Theme, "Recent Charts", []string{"Tab"}, "to focus",
+				return layoutSectionHeaderWithHint(gtx, p.Theme, "Recent Charts", []string{tabKeyHint}, "to focus",
 					sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutCompactDropZone),
@@ -264,7 +268,7 @@ func (p *ReposPage) layoutValuesSection(gtx layout.Context) layout.Dimensions {
 	return layoutSectionCard(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutSectionHeaderWithHint(gtx, p.Theme, "Values", []string{"Tab", "Tab"}, "to focus",
+				return layoutSectionHeaderWithHint(gtx, p.Theme, "Values", []string{tabKeyHint, tabKeyHint}, "to focus",
 					sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutValuesDropZone),
@@ -407,7 +411,7 @@ func (p *ReposPage) layoutRepositoriesSection(gtx layout.Context) layout.Dimensi
 	return layoutSectionCard(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutSectionHeaderWithHint(gtx, p.Theme, "Repositories", []string{"Tab"}, "to focus",
+				return layoutSectionHeaderWithHint(gtx, p.Theme, "Repositories", []string{tabKeyHint}, "to focus",
 					sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutAddRepoRow),

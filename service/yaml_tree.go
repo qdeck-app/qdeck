@@ -14,6 +14,13 @@ const (
 	mergeKey = "<<"
 )
 
+// YAML scalar tags used when constructing nodes by hand (without going
+// through yaml.v3's Encode path).
+const (
+	yamlTagStr  = "!!str"
+	yamlTagNull = "!!null"
+)
+
 const (
 	DefaultYAMLIndent = 2
 	maxYAMLIndent     = 8
@@ -476,7 +483,7 @@ func leafNodeFromValue(value any, preserve *yaml.Node) *yaml.Node {
 
 	if err := node.Encode(value); err != nil {
 		node.Kind = yaml.ScalarNode
-		node.Tag = "!!str"
+		node.Tag = yamlTagStr
 		node.Value = fmt.Sprint(value)
 	}
 
@@ -541,7 +548,7 @@ func descendSequence(current *yaml.Node, seg, next keySegment) (*yaml.Node, erro
 
 	for len(current.Content) <= seg.index {
 		current.Content = append(current.Content, &yaml.Node{
-			Kind: yaml.ScalarNode, Tag: "!!null", Value: "null",
+			Kind: yaml.ScalarNode, Tag: yamlTagNull, Value: typeNull,
 		})
 	}
 
@@ -565,7 +572,7 @@ func descendMapping(current *yaml.Node, seg, next keySegment) (*yaml.Node, error
 
 	idx := mappingKeyIndex(current, seg.name)
 	if idx < 0 {
-		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: seg.name}
+		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: yamlTagStr, Value: seg.name}
 		valNode := containerForNextSegment(next)
 		current.Content = append(current.Content, keyNode, valNode)
 
@@ -596,7 +603,7 @@ func setLeaf(current *yaml.Node, seg keySegment, value any) error {
 
 		for len(current.Content) <= seg.index {
 			current.Content = append(current.Content, &yaml.Node{
-				Kind: yaml.ScalarNode, Tag: "!!null", Value: "null",
+				Kind: yaml.ScalarNode, Tag: yamlTagNull, Value: "null",
 			})
 		}
 
@@ -611,7 +618,7 @@ func setLeaf(current *yaml.Node, seg keySegment, value any) error {
 
 	idx := mappingKeyIndex(current, seg.name)
 	if idx < 0 {
-		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: seg.name}
+		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: yamlTagStr, Value: seg.name}
 		current.Content = append(current.Content, keyNode, leafNodeFromValue(value, nil))
 
 		return nil
@@ -671,7 +678,7 @@ func convertValue(value, typ string) any {
 			return f
 		}
 
-	case "bool":
+	case typeBool:
 		if b, err := strconv.ParseBool(value); err == nil {
 			return b
 		}
