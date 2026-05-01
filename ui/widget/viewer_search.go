@@ -49,7 +49,7 @@ func (v *viewerWindow) layoutSearchRow(gtx layout.Context, th *material.Theme) l
 				return layout.Inset{Left: viewerSearchPadH}.Layout(gtx,
 					func(gtx layout.Context) layout.Dimensions {
 						lbl := material.Caption(th, "Esc \u2715")
-						lbl.Color = theme.ColorMuted
+						lbl.Color = theme.Default.Muted
 
 						return LayoutLabel(gtx, lbl)
 					})
@@ -74,10 +74,10 @@ func (v *viewerWindow) layoutActionButton(
 			Top: viewerNavBtnPadV, Bottom: viewerNavBtnPadV,
 		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Caption(th, label)
-			lbl.Color = theme.ColorAccent
+			lbl.Color = theme.Default.Ink2
 
 			if hovered {
-				lbl.Color = theme.ColorAccentHover
+				lbl.Color = theme.Default.Ink
 			}
 
 			return LayoutLabel(gtx, lbl)
@@ -89,7 +89,7 @@ func (v *viewerWindow) layoutActionButton(
 	if hovered {
 		radius := gtx.Dp(viewerNavBtnRadius)
 		bg := clip.UniformRRect(image.Rectangle{Max: dims.Size}, radius).Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorHover}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.RowHover}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		bg.Pop()
 	}
@@ -145,14 +145,14 @@ func (v *viewerWindow) layoutSearchInput(gtx layout.Context, th *material.Theme)
 
 	// Background.
 	bgRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorCardBg}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Bg2}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	bgRect.Pop()
 
 	// Border edges.
 	for _, edge := range EdgeBorders(bounds, borderW) {
 		r := clip.Rect(edge).Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		r.Pop()
 	}
@@ -176,9 +176,9 @@ func (v *viewerWindow) layoutMatchCount(gtx layout.Context, th *material.Theme) 
 	}
 
 	lbl := material.Caption(th, text)
-	lbl.Color = theme.ColorSecondary
+	lbl.Color = theme.Default.Muted
 
-	return layout.Inset{Left: viewerSearchPadH}.Layout(gtx, lbl.Layout)
+	return layout.Inset{Left: viewerSearchPadH}.Layout(gtx, LabelWidget(lbl))
 }
 
 func (v *viewerWindow) layoutNavButtons(gtx layout.Context, th *material.Theme) layout.Dimensions {

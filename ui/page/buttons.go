@@ -33,7 +33,7 @@ const (
 
 // LayoutTextButton renders a clickable text link with accent color, hover background, and pointer cursor.
 func LayoutTextButton(gtx layout.Context, th *material.Theme, click *widget.Clickable, label string, left unit.Dp) layout.Dimensions {
-	return layoutActionButton(gtx, th, click, label, theme.ColorAccent, left)
+	return layoutActionButton(gtx, th, click, label, theme.Default.Override, left)
 }
 
 func layoutActionButton(
@@ -52,51 +52,11 @@ func layoutActionButton(
 			return layout.Inset{
 				Left: textBtnPaddingH, Right: textBtnPaddingH,
 				Top: textBtnPaddingV, Bottom: textBtnPaddingV,
-			}.Layout(gtx, lbl.Layout)
+			}.Layout(gtx, customwidget.LabelWidget(lbl))
 		})
 		c := m.Stop()
 
 		// Hover background.
-		paintHoverBg(gtx, dims, hovered)
-
-		c.Add(gtx.Ops)
-
-		pushPointerCursor(gtx, dims, click)
-
-		return dims
-	})
-}
-
-// layoutIconTextButton renders a clickable button with a leading icon widget, spacing, and label text.
-func layoutIconTextButton(
-	gtx layout.Context, th *material.Theme, click *widget.Clickable,
-	label string, left unit.Dp, icon layout.Widget,
-) layout.Dimensions {
-	return layout.Inset{Left: left}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		hovered := click.Hovered()
-
-		m := op.Record(gtx.Ops)
-
-		dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{
-				Left: textBtnPaddingH, Right: textBtnPaddingH,
-				Top: textBtnPaddingV, Bottom: textBtnPaddingV,
-			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(icon),
-					layout.Rigid(layout.Spacer{Width: renderIconSpacing}.Layout),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						lbl := material.Body2(th, label)
-						lbl.Color = theme.ColorAccent
-
-						return customwidget.LayoutLabel(gtx, lbl)
-					}),
-				)
-			})
-		})
-
-		c := m.Stop()
-
 		paintHoverBg(gtx, dims, hovered)
 
 		c.Add(gtx.Ops)
@@ -177,7 +137,7 @@ func layoutSectionHeaderWithHint(
 			layout.Rigid(layout.Spacer{Width: hotkeyHintGap}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				lbl := material.Caption(th, suffix)
-				lbl.Color = theme.ColorSecondary
+				lbl.Color = theme.Default.Muted
 
 				return customwidget.LayoutLabel(gtx, lbl)
 			}),
@@ -190,7 +150,7 @@ func layoutSectionHeaderWithHint(
 // layoutHotkeyHint renders text inside a small rounded pill with muted colors.
 func layoutHotkeyHint(gtx layout.Context, th *material.Theme, text string) layout.Dimensions {
 	lbl := material.Caption(th, text)
-	lbl.Color = theme.ColorSecondary
+	lbl.Color = theme.Default.Muted
 
 	m := op.Record(gtx.Ops)
 	dims := layout.Inset{
@@ -203,11 +163,11 @@ func layoutHotkeyHint(gtx layout.Context, th *material.Theme, text string) layou
 	radius := gtx.Dp(hotkeyHintRadius)
 
 	bgClip := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorCardBg}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Bg2}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	bgClip.Pop()
 
-	paintEdgeBorder(gtx, bounds, gtx.Dp(1), theme.ColorSeparator)
+	paintEdgeBorder(gtx, bounds, gtx.Dp(1), theme.Default.Border)
 
 	c.Add(gtx.Ops)
 

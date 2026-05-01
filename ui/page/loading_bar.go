@@ -65,7 +65,7 @@ func layoutLoadingBar(gtx layout.Context) layout.Dimensions {
 
 	// Track background.
 	trackRect := clip.Rect{Max: size}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	trackRect.Pop()
 
@@ -78,7 +78,7 @@ func layoutLoadingBar(gtx layout.Context) layout.Dimensions {
 		Min: image.Pt(offset, 0),
 		Max: image.Pt(offset+indicatorW, barH),
 	}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorAccent}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Ink2}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	indRect.Pop()
 

@@ -64,42 +64,55 @@ func (s *SearchBar) rebuildCacheIfNeeded(entries []service.FlatValueEntry) {
 }
 
 // FilterEntriesWithMultiOverrides returns indices matching key, value, comment,
-// or override editor text across multiple columns.
+// or override editor text across multiple columns. When extrasOnly is true,
+// the result is further restricted to entries with IsCustomOnly == true
+// (keys defined only in the overlay file with no chart-defaults
+// counterpart) — used by the "✚ extras-only" toolbar pill.
+//
 // Reuses the provided out slice to avoid per-frame allocations.
 func (s *SearchBar) FilterEntriesWithMultiOverrides(
 	entries []service.FlatValueEntry,
 	columnEditors [][]widget.Editor,
+	extrasOnly bool,
 	out []int,
 ) []int {
 	query := strings.ToLower(s.Editor.Text())
 	out = out[:0]
 
-	if query == "" {
-		for i := range entries {
-			out = append(out, i)
+	matchesQuery := func(i int) bool {
+		if query == "" {
+			return true
 		}
 
-		return out
-	}
-
-	s.rebuildCacheIfNeeded(entries)
-
-	for i := range entries {
 		if strings.Contains(s.lowerKeys[i], query) ||
 			strings.Contains(s.lowerValues[i], query) ||
 			strings.Contains(s.lowerComments[i], query) {
-			out = append(out, i)
-
-			continue
+			return true
 		}
 
 		for _, eds := range columnEditors {
 			if i < len(eds) && strings.Contains(strings.ToLower(eds[i].Text()), query) {
-				out = append(out, i)
-
-				break
+				return true
 			}
 		}
+
+		return false
+	}
+
+	if query != "" {
+		s.rebuildCacheIfNeeded(entries)
+	}
+
+	for i := range entries {
+		if extrasOnly && !entries[i].IsCustomOnly {
+			continue
+		}
+
+		if !matchesQuery(i) {
+			continue
+		}
+
+		out = append(out, i)
 	}
 
 	return out
@@ -123,7 +136,7 @@ func (s *SearchBar) Layout(gtx layout.Context, th *material.Theme, hint string) 
 
 			// Top border.
 			top := clip.Rect{Max: image.Pt(sz.X, borderW)}.Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+			paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 			top.Pop()
 

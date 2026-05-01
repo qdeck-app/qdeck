@@ -38,17 +38,17 @@ type WinButtons struct {
 func (wb *WinButtons) Layout(gtx layout.Context) layout.Dimensions {
 	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return wb.layoutButton(gtx, &wb.Minimize, theme.ColorHover, theme.ColorSecondary, drawMinimize)
+			return wb.layoutButton(gtx, &wb.Minimize, theme.Default.RowHover, theme.Default.Muted, drawMinimize)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if wb.Maximized {
-				return wb.layoutButton(gtx, &wb.Maximize, theme.ColorHover, theme.ColorSecondary, drawRestore)
+				return wb.layoutButton(gtx, &wb.Maximize, theme.Default.RowHover, theme.Default.Muted, drawRestore)
 			}
 
-			return wb.layoutButton(gtx, &wb.Maximize, theme.ColorHover, theme.ColorSecondary, drawMaximize)
+			return wb.layoutButton(gtx, &wb.Maximize, theme.Default.RowHover, theme.Default.Muted, drawMaximize)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return wb.layoutButton(gtx, &wb.Close, theme.ColorDanger, theme.ColorWhite, drawClose)
+			return wb.layoutButton(gtx, &wb.Close, theme.Default.Danger, theme.Default.White, drawClose)
 		}),
 	)
 }
@@ -69,7 +69,7 @@ func (wb *WinButtons) layoutButton(
 			size := gtx.Dp(winBtnIconSize)
 			gtx.Constraints = layout.Exact(image.Pt(size, size))
 
-			iconColor := theme.ColorSecondary
+			iconColor := theme.Default.Muted
 			if hovered {
 				iconColor = hoverIconColor
 			}

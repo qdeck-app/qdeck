@@ -60,7 +60,7 @@ func (d *ConfirmDialog) Update(gtx layout.Context) ConfirmAction {
 func dialogBackground(radius unit.Dp) func(gtx layout.Context) layout.Dimensions {
 	return func(gtx layout.Context) layout.Dimensions {
 		rect := clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(radius)).Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorDropdownBg}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.Bg}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		rect.Pop()
 
@@ -104,15 +104,15 @@ func (d *ConfirmDialog) Layout(gtx layout.Context, th *material.Theme, message s
 							return layout.Flex{Spacing: layout.SpaceBetween}.Layout(gtx,
 								layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 									btn := material.Button(th, d.NoButton, "Cancel")
-									btn.Background = theme.ColorBtnCancel
-									btn.Color = theme.ColorTextPrimary
+									btn.Background = theme.Default.Muted
+									btn.Color = theme.Default.Ink
 
 									return btn.Layout(gtx)
 								}),
 								layout.Rigid(layout.Spacer{Width: dialogButtonGap}.Layout),
 								layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 									btn := material.Button(th, d.YesButton, "Confirm")
-									btn.Background = theme.ColorDanger
+									btn.Background = theme.Default.Danger
 
 									return btn.Layout(gtx)
 								}),

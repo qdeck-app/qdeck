@@ -310,7 +310,7 @@ func (p *ReposPage) layoutRecentValuesEntries(gtx layout.Context) layout.Dimensi
 								}),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									lbl := material.Caption(p.Theme, entry.ChartDisplayName)
-									lbl.Color = theme.ColorSecondary
+									lbl.Color = theme.Default.Muted
 
 									return customwidget.LayoutLabel(gtx, lbl)
 								}),
@@ -318,7 +318,7 @@ func (p *ReposPage) layoutRecentValuesEntries(gtx layout.Context) layout.Dimensi
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return layoutActionButton(gtx, p.Theme, &p.State.RecentValuesRemoveClicks[index],
-								"x", theme.ColorDanger, repoPaddingSmall)
+								"x", theme.Default.TrafficRed, repoPaddingSmall)
 						}),
 					)
 				})
@@ -381,7 +381,7 @@ func (p *ReposPage) layoutRecentChartItems(gtx layout.Context) layout.Dimensions
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									subtitle := recentSubtitle(entry)
 									lbl := material.Caption(p.Theme, subtitle)
-									lbl.Color = theme.ColorSecondary
+									lbl.Color = theme.Default.Muted
 
 									return customwidget.LayoutLabel(gtx, lbl)
 								}),
@@ -389,7 +389,7 @@ func (p *ReposPage) layoutRecentChartItems(gtx layout.Context) layout.Dimensions
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return layoutActionButton(gtx, p.Theme, &p.State.RecentRemoveClicks[index],
-								"x", theme.ColorDanger, repoPaddingSmall)
+								"x", theme.Default.TrafficRed, repoPaddingSmall)
 						}),
 					)
 				})
@@ -432,7 +432,7 @@ func (p *ReposPage) layoutAddRepoRow(gtx layout.Context) layout.Dimensions {
 	return layoutCardFocusable(gtx, &p.State.AddButton, false,
 		func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Body1(p.Theme, label)
-			lbl.Color = theme.ColorAccent
+			lbl.Color = theme.Default.Ink2
 
 			return customwidget.LayoutLabel(gtx, lbl)
 		})
@@ -532,14 +532,14 @@ func layoutPresetChip(gtx layout.Context, th *material.Theme, click *widget.Clic
 	hovered := click.Hovered()
 
 	lbl := material.Caption(th, label)
-	lbl.Color = theme.ColorAccent
+	lbl.Color = theme.Default.Ink2
 
 	m := op.Record(gtx.Ops)
 	dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Inset{
 			Left: presetChipPadH, Right: presetChipPadH,
 			Top: presetChipPadV, Bottom: presetChipPadV,
-		}.Layout(gtx, lbl.Layout)
+		}.Layout(gtx, customwidget.LabelWidget(lbl))
 	})
 	c := m.Stop()
 
@@ -547,12 +547,12 @@ func layoutPresetChip(gtx layout.Context, th *material.Theme, click *widget.Clic
 	radius := gtx.Dp(presetChipRadius)
 	bw := gtx.Dp(editorFieldBorderWidth)
 
-	borderColor := theme.ColorInputBorder
+	borderColor := theme.Default.Border
 	if hovered {
-		borderColor = theme.ColorAccent
+		borderColor = theme.Default.Ink2
 	}
 
-	paintRoundedBorder(gtx, bounds, radius, bw, borderColor, theme.ColorCardBg)
+	paintRoundedBorder(gtx, bounds, radius, bw, borderColor, theme.Default.Bg2)
 
 	c.Add(gtx.Ops)
 
@@ -601,7 +601,7 @@ func (p *ReposPage) layoutRepoList(gtx layout.Context) layout.Dimensions {
 								layout.Rigid(customwidget.LabelWidget(material.Body1(p.Theme, repo.Name))),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									lbl := material.Caption(p.Theme, repo.URL)
-									lbl.Color = theme.ColorSecondary
+									lbl.Color = theme.Default.Muted
 
 									return customwidget.LayoutLabel(gtx, lbl)
 								}),
@@ -609,11 +609,11 @@ func (p *ReposPage) layoutRepoList(gtx layout.Context) layout.Dimensions {
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return layoutActionButton(gtx, p.Theme,
-								&p.State.UpdateClicks[index], "Update", theme.ColorAccent, repoPaddingBottom)
+								&p.State.UpdateClicks[index], "Update", theme.Default.Ink2, repoPaddingBottom)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return layoutActionButton(gtx, p.Theme,
-								&p.State.DeleteClicks[index], "Delete", theme.ColorDanger, repoPaddingSmall)
+								&p.State.DeleteClicks[index], "Delete", theme.Default.TrafficRed, repoPaddingSmall)
 						}),
 					)
 				})

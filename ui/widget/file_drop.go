@@ -207,14 +207,14 @@ func layoutPickButton(gtx layout.Context, th *material.Theme, click *giowidget.C
 	parentH := gtx.Constraints.Max.Y
 
 	lbl := material.Body2(th, label)
-	lbl.Color = theme.ColorAccent
+	lbl.Color = theme.Default.Override
 
 	m := op.Record(gtx.Ops)
 
 	dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Inset{
 			Left: pickBtnPaddingH, Right: pickBtnPaddingH,
-		}.Layout(gtx, lbl.Layout)
+		}.Layout(gtx, LabelWidget(lbl))
 	})
 
 	c := m.Stop()
@@ -226,7 +226,7 @@ func layoutPickButton(gtx layout.Context, th *material.Theme, click *giowidget.C
 		bounds := image.Rectangle{Max: image.Pt(dims.Size.X, btnH)}
 		bg := clip.Rect(bounds).Push(gtx.Ops)
 
-		paint.ColorOp{Color: theme.ColorHover}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.RowHover}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		bg.Pop()
 	}

@@ -229,7 +229,7 @@ func (m *AnchorContextMenu) layoutPanel(gtx layout.Context, th *material.Theme) 
 			bg := clip.UniformRRect(
 				image.Rectangle{Max: gtx.Constraints.Min}, gtx.Dp(anchorMenuRadius),
 			).Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorDropdownBg}.Add(gtx.Ops)
+			paint.ColorOp{Color: theme.Default.Bg}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 			bg.Pop()
 
@@ -260,7 +260,7 @@ func (m *AnchorContextMenu) layoutItem(
 			func(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints.Min.Y = gtx.Dp(anchorMenuRowHeight)
 				lbl := material.Body2(th, label)
-				lbl.Color = theme.ColorMuted
+				lbl.Color = theme.Default.Muted
 
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{}.Layout(gtx,
@@ -281,16 +281,16 @@ func (m *AnchorContextMenu) layoutItem(
 				// Keyboard selection takes priority over hover so an arrow-key
 				// user sees a stable highlight that doesn't flicker while the
 				// cursor happens to sit over a different row.
-				bg := theme.ColorTransparent
+				bg := theme.Default.Transparent
 
 				switch {
 				case selected:
-					bg = theme.ColorFocus
+					bg = theme.Default.RowSelected
 				case btn.Hovered():
-					bg = theme.ColorHover
+					bg = theme.Default.RowHover
 				}
 
-				if bg != theme.ColorTransparent {
+				if bg != theme.Default.Transparent {
 					r := clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops)
 					paint.ColorOp{Color: bg}.Add(gtx.Ops)
 					paint.PaintOp{}.Add(gtx.Ops)

@@ -50,7 +50,7 @@ func layoutEditorField(gtx layout.Context, th *material.Theme, editor *widget.Ed
 		radius := gtx.Dp(editorFieldRadius)
 		bw := gtx.Dp(editorFieldBorderWidth)
 
-		paintRoundedBorder(gtx, bounds, radius, bw, theme.ColorInputBorder, theme.ColorDropdownBg)
+		paintRoundedBorder(gtx, bounds, radius, bw, theme.Default.Border, theme.Default.Bg)
 
 		c.Add(gtx.Ops)
 
@@ -81,7 +81,7 @@ func layoutPanelLabel(gtx layout.Context, th *material.Theme, text string, top, 
 // LayoutShortcutsHelp methods to fill the notification bar's idle slot.
 func layoutHelpHint(gtx layout.Context, th *material.Theme, text string) layout.Dimensions {
 	lbl := material.Body2(th, text)
-	lbl.Color = theme.ColorSecondary
+	lbl.Color = theme.Default.Muted
 	lbl.MaxLines = 1
 
 	return customwidget.LayoutLabel(gtx, lbl)

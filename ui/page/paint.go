@@ -12,6 +12,16 @@ import (
 	customwidget "github.com/qdeck-app/qdeck/ui/widget"
 )
 
+// hoverOverlay is a translucent black wash used by paintHoverBg. It must
+// stack visibly on top of any underlying surface (card body, hovered card
+// wash, dialog bg, etc.) — using an opaque token like Default.RowHover
+// would collide with the parent card's own hover paint and disappear.
+// Alpha 28 ≈ 11%: light enough to read on Bg2, dark enough to remain
+// visible when the card behind it is also hovered (RowHover).
+//
+//nolint:mnd // documented above.
+var hoverOverlay = color.NRGBA{A: 28}
+
 // paintHoverBg paints a rounded hover background behind a widget when hovered.
 func paintHoverBg(gtx layout.Context, dims layout.Dimensions, hovered bool) {
 	if !hovered {
@@ -22,7 +32,7 @@ func paintHoverBg(gtx layout.Context, dims layout.Dimensions, hovered bool) {
 	radius := gtx.Dp(textBtnCornerRadius)
 	bg := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
 
-	paint.ColorOp{Color: theme.ColorHover}.Add(gtx.Ops)
+	paint.ColorOp{Color: hoverOverlay}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	bg.Pop()
 }
@@ -59,5 +69,5 @@ func paintEdgeBorder(gtx layout.Context, bounds image.Rectangle, bw int, c color
 }
 
 func paintFocusBorder(gtx layout.Context, bounds image.Rectangle, bw int) {
-	paintEdgeBorder(gtx, bounds, bw, theme.ColorAccent)
+	paintEdgeBorder(gtx, bounds, bw, theme.Default.Ink2)
 }

@@ -7,13 +7,8 @@ import (
 	"strings"
 
 	"gioui.org/io/clipboard"
-	"gioui.org/io/event"
-	"gioui.org/io/pointer"
 	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
 	"gioui.org/unit"
-	"gioui.org/widget"
 	"gioui.org/widget/material"
 
 	"github.com/qdeck-app/qdeck/ui/platform"
@@ -60,8 +55,9 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		defaultsHint := platform.ShortcutLabel("\u2318+1", "F3")
 		overridesHint := platform.ShortcutLabel("\u2318+2", "F4")
 
-		// defaults + overrides + show-comments + loading + save + spacer + helm cmd + copy
-		const maxRenderChildren = 8
+		// defaults + gap + overrides + gap + save + show-comments + loading
+		// + flex spacer + helm cmd + gap + copy.
+		const maxRenderChildren = 12
 
 		var (
 			children [maxRenderChildren]layout.FlexChild
@@ -69,22 +65,29 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		)
 
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutRenderButton(gtx, p.Theme, &p.State.RenderDefaultsButton,
-				renderDefaultsLabelBase+" ("+defaultsHint+")")
+			return customwidget.LayoutButton(gtx, p.Theme, customwidget.ButtonDefault,
+				&p.State.RenderDefaultsButton, customwidget.LayoutPlayIcon,
+				renderDefaultsLabelBase, defaultsHint, false)
 		})
 		n++
 
-		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutRenderButton(gtx, p.Theme, &p.State.RenderOverridesButton,
-				renderOverridesLabelBase+" ("+overridesHint+")")
-		})
+		children[n] = layout.Rigid(layout.Spacer{Width: toolbarBtnGap}.Layout)
 		n++
 
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layoutIconTextButton(gtx, p.Theme, &p.State.SaveChartButton, "Save .tgz", 0,
-				func(gtx layout.Context) layout.Dimensions {
-					return customwidget.LayoutDownloadIcon(gtx, downloadIconSize, theme.ColorAccent)
-				})
+			return customwidget.LayoutButton(gtx, p.Theme, customwidget.ButtonDefault,
+				&p.State.RenderOverridesButton, customwidget.LayoutPlayIcon,
+				renderOverridesLabelBase, overridesHint, false)
+		})
+		n++
+
+		children[n] = layout.Rigid(layout.Spacer{Width: toolbarBtnGap}.Layout)
+		n++
+
+		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return customwidget.LayoutButton(gtx, p.Theme, customwidget.ButtonDefault,
+				&p.State.SaveChartButton, customwidget.LayoutDownloadIcon,
+				"Save .tgz", "", false)
 		})
 		n++
 
@@ -107,7 +110,7 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 			children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Left: valuesSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					lbl := material.Caption(p.Theme, "Rendering...")
-					lbl.Color = theme.ColorSecondary
+					lbl.Color = theme.Default.Muted
 
 					return customwidget.LayoutLabel(gtx, lbl)
 				})
@@ -128,15 +131,19 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints.Max.X = maxW
 
 				lbl := material.Body2(p.Theme, cmd)
-				lbl.Color = theme.ColorSecondary
+				lbl.Color = theme.Default.Ink2
 				lbl.MaxLines = 1
 
 				return customwidget.LayoutLabel(gtx, lbl)
 			})
 			n++
 
+			children[n] = layout.Rigid(layout.Spacer{Width: toolbarBtnGap}.Layout)
+			n++
+
 			children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return LayoutTextButton(gtx, p.Theme, &p.State.CopyInstallButton, copyLabel, valuesSpacing)
+				return customwidget.LayoutButton(gtx, p.Theme, customwidget.ButtonDefault,
+					&p.State.CopyInstallButton, nil, copyLabel, "", false)
 			})
 			n++
 		}
@@ -145,83 +152,36 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 	})
 }
 
-// layoutRenderButton renders a transparent button with hover background,
-// a play icon on the left, and label text.
-func layoutRenderButton(
-	gtx layout.Context,
-	th *material.Theme,
-	click *widget.Clickable,
-	label string,
-) layout.Dimensions {
-	hovered := click.Hovered()
-
-	m := op.Record(gtx.Ops)
-
-	dims := click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Inset{
-			Left: renderBtnPaddingH, Right: renderBtnPaddingH,
-			Top: renderBtnPaddingV, Bottom: renderBtnPaddingV,
-		}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return customwidget.LayoutPlayIcon(gtx, renderPlayIconSize, theme.ColorAccent)
-				}),
-				layout.Rigid(layout.Spacer{Width: renderIconSpacing}.Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Body2(th, label)
-					lbl.Color = theme.ColorAccent
-
-					return customwidget.LayoutLabel(gtx, lbl)
-				}),
-			)
-		})
-	})
-
-	c := m.Stop()
-
-	paintHoverBg(gtx, dims, hovered)
-
-	c.Add(gtx.Ops)
-
-	pass := pointer.PassOp{}.Push(gtx.Ops)
-	area := clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops)
-
-	event.Op(gtx.Ops, click)
-	pointer.CursorPointer.Add(gtx.Ops)
-
-	area.Pop()
-	pass.Pop()
-
-	return dims
-}
-
 // LayoutShortcutsHelp renders a single-line hotkey + color legend hint, sized
 // to fit the notification bar's idle slot. Called from the app shell when the
 // values page is active and no notification is showing.
 func (p *ValuesPage) LayoutShortcutsHelp(gtx layout.Context) layout.Dimensions {
 	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Body2(p.Theme, helpShortcutLine)
-			lbl.Color = theme.ColorSecondary
-			lbl.MaxLines = 1
-
-			return customwidget.LayoutLabel(gtx, lbl)
+		layout.Rigid(p.helpMutedLabel(helpShortcutLine)),
+		// Flex spacer pushes the color-swatch legend to the right edge so
+		// kbd hints sit left, swatches sit right. When the bar is too
+		// narrow to fit both, the swatches simply collapse against the
+		// hints — Rigid children take precedence over the Flexed gap.
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layout.Dimensions{Size: gtx.Constraints.Min}
 		}),
-		layout.Rigid(layout.Spacer{Width: helpShortcutTrailGap}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return p.layoutLegendItem(gtx, theme.ColorCustomOnlyMarker, "override-only")
-		}),
-		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return p.layoutLegendItem(gtx, theme.ColorScrollMarker, "override")
-		}),
-		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return p.layoutLegendItem(gtx, theme.ColorGitAddedBar, "git added")
+			// "extra" — keys defined only in the overlay with no chart
+			// default. The cyan-teal swatch matches the in-grid wash and
+			// the "+" chip on the key cell.
+			return p.layoutLegendItem(gtx, theme.Default.Extra, "extra (override-only)")
 		}),
 		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return p.layoutLegendItem(gtx, theme.ColorGitModifiedBar, "git modified")
+			return p.layoutLegendItem(gtx, theme.Default.Override, "override")
+		}),
+		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return p.layoutLegendItem(gtx, theme.Default.Added, "git added")
+		}),
+		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return p.layoutLegendItem(gtx, theme.Default.Modified, "git modified")
 		}),
 	)
 }
@@ -232,18 +192,25 @@ func (p *ValuesPage) LayoutShortcutsHelp(gtx layout.Context) layout.Dimensions {
 func (p *ValuesPage) layoutLegendItem(gtx layout.Context, c color.NRGBA, label string) layout.Dimensions {
 	return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			sq := material.Body2(p.Theme, "\u25a0") // ■
+			sq := material.Label(p.Theme, theme.Default.SizeSM, "\u25a0") // ■
 			sq.Color = c
 
 			return customwidget.LayoutLabel(gtx, sq)
 		}),
 		layout.Rigid(layout.Spacer{Width: helpGlyphTextGap}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Body2(p.Theme, label)
-			lbl.Color = theme.ColorSecondary
-			lbl.MaxLines = 1
-
-			return customwidget.LayoutLabel(gtx, lbl)
-		}),
+		layout.Rigid(p.helpMutedLabel(label)),
 	)
+}
+
+// helpMutedLabel is the shared rendering used for both the kbd-hint line
+// and each legend item's text label. Centralizes the size/color/maxLines
+// trio so a future restyle changes one place.
+func (p *ValuesPage) helpMutedLabel(txt string) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		lbl := material.Label(p.Theme, theme.Default.SizeSM, txt)
+		lbl.Color = theme.Default.Muted
+		lbl.MaxLines = 1
+
+		return customwidget.LayoutLabel(gtx, lbl)
+	}
 }

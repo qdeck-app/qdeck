@@ -3,12 +3,9 @@ package widget
 import (
 	"image"
 	"image/color"
-	"strings"
-	"unicode/utf8"
 
 	"gioui.org/gesture"
 	"gioui.org/io/event"
-	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -23,6 +20,35 @@ import (
 	"github.com/qdeck-app/qdeck/ui/state"
 	"github.com/qdeck-app/qdeck/ui/theme"
 )
+
+// Yaml type-name literals shared between overrideHint and the bool-switch
+// dispatch. Declared here (their primary consumer) so they survive the
+// type_tag.go deletion that removed their previous home.
+const (
+	typeNameString  = "string"
+	typeNameNumber  = "number"
+	typeNameBool    = "bool"
+	typeNameNull    = "null"
+	typeNameUnknown = "unknown"
+)
+
+// numericInputFilter is the widget.Editor.Filter set for number/integer
+// cells. Includes digits plus minus, dot, and exponent characters so
+// scientific notation and negative floats still type cleanly. The 'e' /
+// 'E' lets users write 1e6 / 1.5E-3.
+const numericInputFilter = "0123456789.-eE+"
+
+// isNumericType reports whether an entry.Type string represents a numeric
+// scalar that the input filter should apply to. Mirrors the set
+// previously recognized by the deleted type_tag widget.
+func isNumericType(entryType string) bool {
+	switch entryType {
+	case "int", "integer", typeNameNumber, "float", "float64", "uint", "uint64":
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	overrideDefaultRatio         = 0.6
@@ -106,6 +132,12 @@ type OverrideTable struct {
 	defaultBadgeClicks []gesture.Click
 	columnBadgeClicks  [state.MaxCustomColumns][]gesture.Click
 	rightClickTargets  [state.MaxCustomColumns][]rightClickTarget
+
+	// Switch states for bool-typed override cells. Indexed by [col][rowIndex]
+	// (filtered row index, not entry index — matches the rest of the
+	// per-row buffers above so click targets stay stable across filter
+	// changes). Grown on demand by ensureSwitchStates.
+	switchStates [state.MaxCustomColumns][]SwitchState
 
 	// lastRightClickPos is the pointer's position in table-local coordinates
 	// at the most recent secondary-button press, captured by a table-root
@@ -239,6 +271,19 @@ func (t *OverrideTable) ensureBadgeClicks(count int) {
 	}
 }
 
+// ensureSwitchStates is structurally identical to ensureRightClickTargets;
+// extracting a generic helper would force every caller through the same
+// indirection for marginal savings.
+//
+//nolint:dupl // shape mirrors ensureRightClickTargets over a different element type.
+func (t *OverrideTable) ensureSwitchStates(count int) {
+	for c := range state.MaxCustomColumns {
+		if count > len(t.switchStates[c]) {
+			t.switchStates[c] = append(t.switchStates[c], make([]SwitchState, count-len(t.switchStates[c]))...)
+		}
+	}
+}
+
 // rightClickTarget is a single-byte struct whose address uniquely identifies
 // one (col, row) editor cell for Gio's pointer event dispatch. Empty structs
 // would share an address across the slice and break dispatch; a 1-byte field
@@ -247,6 +292,7 @@ type rightClickTarget struct {
 	_ byte
 }
 
+//nolint:dupl // shape mirrors ensureSwitchStates over a different element type.
 func (t *OverrideTable) ensureRightClickTargets(count int) {
 	for c := range state.MaxCustomColumns {
 		if count > len(t.rightClickTargets[c]) {
@@ -317,15 +363,15 @@ func (g colGeometry) columnBounds(c, rightW int) (x, w int) {
 // overrideHint returns the editor placeholder for the given value type.
 func overrideHint(entryType string) string {
 	switch entryType {
-	case "string":
+	case typeNameString:
 		return "click to override (string)"
-	case "number":
+	case typeNameNumber:
 		return "click to override (number)"
-	case "bool":
+	case typeNameBool:
 		return "click to override (bool)"
-	case "null":
+	case typeNameNull:
 		return "click to override (null)"
-	case "unknown":
+	case typeNameUnknown:
 		return "click to override (unknown)"
 	default:
 		return "click to override"
@@ -343,6 +389,7 @@ func (t *OverrideTable) Layout(
 	t.ensureCellClicks(len(filteredIndices))
 	t.ensureCollapseClicks(len(filteredIndices))
 	t.ensureBadgeClicks(len(filteredIndices))
+	t.ensureSwitchStates(len(filteredIndices))
 	t.ensureRightClickTargets(len(filteredIndices))
 
 	t.HoveredRow = overrideNoHover
@@ -520,6 +567,19 @@ func (t *OverrideTable) layoutRow(
 												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 													return LayoutHighlightedLabel(gtx, lbl, t.SearchQuery)
 												}),
+												// Extras "+" chip — ALWAYS visible (not hover-gated)
+												// because the user always needs to see that a row has
+												// no chart default. A typo in an extra key would
+												// silently render as a no-op row otherwise.
+												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+													if !entry.IsCustomOnly {
+														return layout.Dimensions{}
+													}
+
+													return layout.Inset{Left: overrideBadgeGap}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+														return LayoutExtraChip(gtx, t.Theme)
+													})
+												}),
 											)
 										})
 									}),
@@ -532,6 +592,10 @@ func (t *OverrideTable) layoutRow(
 
 										return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
 											layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+												if entry.IsCustomOnly && !section {
+													return layoutMissingDefault(gtx, t.Theme)
+												}
+
 												return layoutDefaultValue(gtx, t.Theme, &t.DefaultValueEditors[entryIdx])
 											}),
 											layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -561,7 +625,7 @@ func (t *OverrideTable) layoutRow(
 							return t.layoutSectionBadges(gtx, index, entry.Key, g, rightW)
 						}
 
-						return t.layoutRightColumns(gtx, index, entryIdx, entry.Key, g, entry.Type)
+						return t.layoutRightColumns(gtx, index, entryIdx, entry.Key, g, entry.Type, entries)
 					}),
 				)
 			}),
@@ -589,43 +653,51 @@ func (t *OverrideTable) layoutRow(
 		gitStatus = t.gitChangeStatus(entries[entryIdx].Key)
 	}
 
-	// Custom-only marker (override-only entries with no defaults counterpart):
-	// painted first so subsequent tints — translucent hover/focus across the
-	// full row, opaque override/git tints on the right-panel only — composite
-	// on top instead of being clobbered. Sections take a horizontal gradient
-	// to call out a new subtree; leaves take a saturated bar at the row's
-	// left edge so an isolated new key still has a distinct visual anchor.
-	if entry.IsCustomOnly {
-		if section {
-			paintCustomOnlySectionGradient(gtx, dims.Size.Y, theme.ColorCustomOnlyMarker)
-		} else {
-			paintCustomOnlyLeafBar(gtx, dims.Size.Y, theme.ColorCustomOnlyMarker)
-		}
+	// Paint hover / selected wash first so the per-axis tints below
+	// (override, git, extra) can overpaint the right side and only the
+	// key column carries hover feedback when the row is also tagged.
+	switch {
+	case section && index == t.FocusedRow:
+		// Spec: focused row gets the row-selected fill + a 2dp amber
+		// left edge so the active position feels anchored.
+		paintRowBg(gtx, dims.Size.Y, theme.Default.RowSelected)
+		paintOverrideStrip(gtx, 0, dims.Size.Y, theme.Default.Override)
+	case hovered:
+		paintRowBg(gtx, dims.Size.Y, theme.Default.RowHover)
 	}
 
+	// Extras are an INDEPENDENT axis from overrides — a key can be
+	// "defined only in overlay" with or without an actual value. The
+	// extra wash dominates the right (override-editor) side; the key
+	// cell carries a faint cyan tint so descendants of an extra branch
+	// read as a single unit. When a row is BOTH extra and overridden,
+	// the extra colors win — there's no defaults-vs-override distinction
+	// to communicate (the only value IS the override).
 	switch {
+	case entry.IsCustomOnly:
+		paintRowBgTo(gtx, g.rightStart, dims.Size.Y, theme.Default.ExtraFaint)
+		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.Default.ExtraBg)
+		paintOverrideStrip(gtx, g.rightStart, dims.Size.Y, theme.Default.Extra)
 	case hasOverride:
 		// Override and git tints both describe a change in the user's file,
 		// not the chart defaults — so they cover only the right (override-
 		// editor) side of the row. Tinting the full row would imply the
 		// key+default columns also changed, which they didn't.
-		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.ColorOverride)
+		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.Default.OverrideBg)
+		paintOverrideStrip(gtx, g.rightStart, dims.Size.Y, theme.Default.Override)
 	case gitStatus == domain.GitAdded:
-		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.ColorGitAdded)
+		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.Default.AddedBg)
+		paintOverrideStrip(gtx, g.rightStart, dims.Size.Y, theme.Default.Added)
 	case gitStatus == domain.GitModified:
-		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.ColorGitModified)
-	case section && index == t.FocusedRow:
-		// Sections have no editable cells, so the per-column focus rect below
-		// doesn't fire. Paint a row-wide focus tint — same color as editable
-		// cell focus — so keyboard focus on a section chevron is visible and
-		// distinguishable from a plain hover row.
-		paintRowBg(gtx, dims.Size.Y, theme.ColorFocus)
-	case hovered:
-		paintRowBg(gtx, dims.Size.Y, theme.ColorHover)
+		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.Default.ModifiedBg)
+		paintOverrideStrip(gtx, g.rightStart, dims.Size.Y, theme.Default.Modified)
 	}
 
 	// Focus cell highlight: paint between the row background and the editor
 	// content so the editor text remains crisp on top of the tinted fill.
+	// Spec: "Selected: fill row-selected plus a 2pt-wide left edge in
+	// override (amber)" — the left edge is what makes the active cell
+	// visually anchored, not just generally tinted.
 	if !section && index == t.FocusedRow && t.FocusedCol >= 0 && t.FocusedCol < g.count {
 		colX, colW := g.columnBounds(t.FocusedCol, rightW)
 
@@ -633,9 +705,11 @@ func (t *OverrideTable) layoutRow(
 			Min: image.Pt(colX, 0),
 			Max: image.Pt(colX+colW, dims.Size.Y),
 		}.Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorFocus}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.RowSelected}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		rect.Pop()
+
+		paintOverrideStrip(gtx, colX, dims.Size.Y, theme.Default.Override)
 	}
 
 	// Anchor membership stripes on the row's left side, sitting at the indent
@@ -650,11 +724,13 @@ func (t *OverrideTable) layoutRow(
 	t.anchorMembershipScratch = t.collectAnchorMemberships(entry.Key, t.anchorMembershipScratch[:0])
 	if len(t.anchorMembershipScratch) > 0 {
 		stripeW := gtx.Dp(anchorStripeWidth)
-		baseX := gtx.Dp(overridePaddingH)
 		levelW := gtx.Dp(overrideIndentPerLevel)
 
 		for _, m := range t.anchorMembershipScratch {
-			x := baseX + m.depth*levelW
+			// Stripes start flush at the row's left edge — no left
+			// padding inset. Each ancestor's stripe shifts right by
+			// its indent depth so nested anchors stack visually.
+			x := m.depth * levelW
 
 			paintAnchorStripe(gtx, x, stripeW, dims.Size.Y, t.anchorColor(m.name))
 		}
@@ -668,9 +744,9 @@ func (t *OverrideTable) layoutRow(
 
 	// Git change indicator bar on the override cell's left edge.
 	if gitStatus != domain.GitUnchanged {
-		barColor := theme.ColorGitAddedBar
+		barColor := theme.Default.Added
 		if gitStatus == domain.GitModified {
-			barColor = theme.ColorGitModifiedBar
+			barColor = theme.Default.Modified
 		}
 
 		paintGitIndicator(gtx, g.rightStart, dims.Size.Y, barColor)
@@ -687,6 +763,7 @@ func (t *OverrideTable) layoutRightColumns(
 	entryKey string,
 	g colGeometry,
 	entryType string,
+	entries []service.FlatValueEntry,
 ) layout.Dimensions {
 	rightW := g.colW*g.count + g.totalDivW
 
@@ -719,7 +796,7 @@ func (t *OverrideTable) layoutRightColumns(
 
 					dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return t.layoutEditorCell(gtx, col, entryIdx, hint)
+							return t.layoutEditorCell(gtx, col, entryIdx, rowIndex, hint, entryType, entryKey, entries)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return t.layoutAnchorBadge(
@@ -807,204 +884,6 @@ func (t *OverrideTable) layoutSectionBadges(
 	return layout.Flex{}.Layout(gtx, children[:n]...)
 }
 
-// layoutCommentRow paints an orphan-comment row from the user's custom values
-// file. Comment rows live in the same lane as the override editor (right side
-// of the table) so they read as the user's own annotations on the values
-// file, not as commentary mixed into the chart-defaults view. The left panel
-// (key + default value) stays empty — comment rows have no underlying leaf.
-//
-// Foot-block rows clamp to overrideCommentMaxLines so a 20-line YAML example
-// commented out for documentation can't dominate the table; banner and
-// trailer rows render unclamped because the user explicitly typed them at
-// file scope and wants the full text visible. ShowComments is NOT consulted —
-// these are first-class user annotations on their own file, not chart-side
-// documentation noise.
-//
-// The comment editor lives at columnEditors[sourceCol][entryIdx]. The slot is
-// otherwise unused (comment rows have no value), so reusing it avoids a
-// parallel editor pool. Source column is currently always 0 — multi-column
-// comment lanes are a follow-up.
-func (t *OverrideTable) layoutCommentRow(
-	gtx layout.Context, index int, entryIdx int, entry service.FlatValueEntry,
-) layout.Dimensions {
-	hovered := t.hovers[index].Update(gtx.Source)
-	if hovered {
-		t.HoveredRow = index
-	} else if t.HoveredRow == index {
-		t.HoveredRow = overrideNoHover
-	}
-
-	indent := overrideIndentPerLevel * unit.Dp(max(0, entry.Depth-1))
-	totalW := gtx.Constraints.Max.X
-
-	ratio := t.ratio()
-	dividerW := gtx.Dp(overrideDividerW)
-	leftW := int(ratio * float32(totalW))
-	rightW := max(totalW-leftW-dividerW, 0)
-
-	maxLines := 0
-	if entry.FootAfterKey != "" {
-		maxLines = overrideCommentMaxLines
-	}
-
-	t.processCommentEditorChange(gtx, entryIdx)
-
-	// Record content so backgrounds/dividers paint underneath the editor text.
-	m := op.Record(gtx.Ops)
-
-	dims := layout.Inset{Top: overridePaddingV, Bottom: overridePaddingV}.Layout(gtx,
-		func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{}.Layout(gtx,
-				// Left panel: empty. The comment doesn't belong to any leaf
-				// key, so the key + default value cells are blank. Reserving
-				// the width keeps the right-side comment aligned with leaf
-				// override editors directly above and below.
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Dimensions{Size: image.Pt(leftW, 0)}
-				}),
-				// Vertical divider matching leaf rows.
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Dimensions{Size: image.Pt(dividerW, 0)}
-				}),
-				// Right panel: comment editor, indented to the surrounding
-				// leaf's depth so the foot-block visually trails the leaf
-				// it annotates.
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					gtx.Constraints.Min.X = rightW
-					gtx.Constraints.Max.X = rightW
-
-					return layout.Inset{
-						Left:  overridePaddingH + indent,
-						Right: overridePaddingH,
-					}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						return t.layoutCommentEditor(gtx, entryIdx, maxLines)
-					})
-				}),
-			)
-		})
-
-	if dims.Size.X < totalW {
-		dims.Size.X = totalW
-	}
-
-	c := m.Stop()
-
-	defer clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops).Pop()
-
-	// Register hover + click slots so the per-row buffers stay aligned with
-	// FilteredIndices. Click on the right panel focuses the comment editor.
-	t.hovers[index].Add(gtx.Ops)
-	t.cellClicks[index].Add(gtx.Ops)
-
-	t.handleCommentRowClick(gtx, index, entryIdx, leftW)
-
-	c.Add(gtx.Ops)
-
-	// Vertical divider painted on top of the recorded content (matches
-	// drawRowDecorations on leaf rows but inlined since we don't need the
-	// sub-column dividers / tree guides).
-	divLine := clip.Rect{
-		Min: image.Pt(leftW, 0),
-		Max: image.Pt(leftW+dividerW, dims.Size.Y),
-	}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
-	paint.PaintOp{}.Add(gtx.Ops)
-	divLine.Pop()
-
-	// Horizontal separator at the bottom of the row.
-	separatorH := gtx.Dp(overrideSeparatorH)
-
-	sep := clip.Rect{
-		Min: image.Pt(0, dims.Size.Y-separatorH),
-		Max: image.Pt(totalW, dims.Size.Y),
-	}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
-	paint.PaintOp{}.Add(gtx.Ops)
-	sep.Pop()
-
-	return dims
-}
-
-// commentSourceCol is the column whose editor pool backs comment-row text.
-// V1 always uses 0 — comments are sourced from the first loaded custom file.
-const commentSourceCol = 0
-
-// layoutCommentEditor paints the editor for a comment row. maxLines is
-// currently advisory only — the underlying widget.Editor in this Gio version
-// doesn't expose a per-instance line clamp, so foot-block rows rely on the
-// caller's typical foot-block content (a few lines) being short enough not
-// to dominate; banner/trailer rows render unclamped by design. _ is
-// reserved for a future clamp once we add a line-aware editor wrapper.
-func (t *OverrideTable) layoutCommentEditor(gtx layout.Context, entryIdx, _ int) layout.Dimensions {
-	editors := t.ColumnEditors[commentSourceCol]
-	if entryIdx >= len(editors) {
-		return layout.Dimensions{}
-	}
-
-	editors[entryIdx].SingleLine = false
-
-	ed := material.Editor(t.Theme, &editors[entryIdx], "")
-	ed.Color = theme.ColorMuted
-	ed.TextSize = viewerEditorTextSize
-
-	return LayoutEditor(gtx, t.Theme.Shaper, ed)
-}
-
-// processCommentEditorChange drains pending change events on the comment
-// editor for entryIdx and fires OnChanged once if any landed. Mirrors the
-// shape of processEditorChanges but skips the anchor / autoindent / override
-// flag bookkeeping that's leaf-specific.
-func (t *OverrideTable) processCommentEditorChange(gtx layout.Context, entryIdx int) {
-	editors := t.ColumnEditors[commentSourceCol]
-	if entryIdx >= len(editors) {
-		return
-	}
-
-	changed := false
-
-	for {
-		ev, ok := editors[entryIdx].Update(gtx)
-		if !ok {
-			break
-		}
-
-		if _, isChange := ev.(widget.ChangeEvent); isChange {
-			changed = true
-		}
-	}
-
-	if !changed || t.OnCommentChanged == nil {
-		return
-	}
-
-	t.OnCommentChanged(commentSourceCol)
-}
-
-// handleCommentRowClick focuses the comment editor when the user clicks
-// inside the right panel, matching how leaf rows put a text cursor at the
-// click point.
-func (t *OverrideTable) handleCommentRowClick(gtx layout.Context, index, entryIdx, leftW int) {
-	for {
-		ev, ok := t.cellClicks[index].Update(gtx.Source)
-		if !ok {
-			break
-		}
-
-		if ev.Kind != gesture.KindPress {
-			continue
-		}
-
-		if ev.Position.X < leftW {
-			continue
-		}
-
-		editors := t.ColumnEditors[commentSourceCol]
-		if entryIdx < len(editors) {
-			gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
-		}
-	}
-}
-
 // drawRowDecorations renders the divider line, sub-column dividers, tree guides,
 // and horizontal separator for a single row.
 func (t *OverrideTable) drawRowDecorations(
@@ -1016,12 +895,12 @@ func (t *OverrideTable) drawRowDecorations(
 ) {
 	rowH := dims.Size.Y
 
-	// Main vertical divider.
+	// Main vertical divider — paper-thin Guide token, not Border.
 	divLine := clip.Rect{
 		Min: image.Pt(g.leftW, 0),
 		Max: image.Pt(g.leftW+g.dividerW, rowH),
 	}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Guide}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	divLine.Pop()
 
@@ -1034,7 +913,7 @@ func (t *OverrideTable) drawRowDecorations(
 				Min: image.Pt(x, 0),
 				Max: image.Pt(x+g.subDivW, rowH),
 			}.Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorTreeGuide}.Add(gtx.Ops)
+			paint.ColorOp{Color: theme.Default.Guide}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 			line.Pop()
 		}
@@ -1050,19 +929,20 @@ func (t *OverrideTable) drawRowDecorations(
 			Min: image.Pt(x, 0),
 			Max: image.Pt(x+guideW, rowH),
 		}.Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorTreeGuide}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.Guide}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		guide.Pop()
 	}
 
-	// Horizontal separator.
+	// Horizontal separator at the bottom of the row — Guide for the
+	// paper-thin feel mandated by the design spec.
 	separatorH := gtx.Dp(overrideSeparatorH)
 
 	sep := clip.Rect{
 		Min: image.Pt(0, rowH-separatorH),
 		Max: image.Pt(totalW, rowH),
 	}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Guide}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	sep.Pop()
 }
@@ -1109,51 +989,6 @@ func (t *OverrideTable) layoutChevronSlot(
 	area.Pop()
 
 	return layout.Dimensions{Size: size}
-}
-
-// layoutEditorCell renders one override editor cell, drawing indent guides
-// underneath for multi-line values. Factored out of layoutRightColumns so the
-// cell body can be stacked with an anchor badge overlay without nesting.
-// The editor is always editable — anchored cells keep a visible caret and
-// allow selection; actual text mutations are caught in processEditorChanges
-// and reverted with a warning dialog.
-func (t *OverrideTable) layoutEditorCell(gtx layout.Context, col, entryIdx int, hint string) layout.Dimensions {
-	editors := t.ColumnEditors[col]
-	ed := material.Editor(t.Theme, &editors[entryIdx], hint)
-	ed.TextSize = viewerEditorTextSize
-
-	// Force the editor to fill its allocated cell width. widget.Editor sizes
-	// its visible clip to gtx.Constraints.Constrain(textBoundingBox), so when
-	// text is narrower than the cell the editor's hit clip is narrower too —
-	// clicks in the empty horizontal space focus the row gesture but never
-	// reach the editor's own clicker, so the caret doesn't move and the user
-	// has to click again on real text. Multi-line rows make this routine on
-	// Windows because there's more vertical space where a click can land in a
-	// short line. Setting Min.X = Max.X expands the clip to the full column.
-	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-
-	edText := editors[entryIdx].Text()
-
-	if !strings.Contains(edText, "\n") {
-		return LayoutEditor(gtx, t.Theme.Shaper, ed)
-	}
-
-	indent := service.DefaultYAMLIndent
-	if t.ColumnStates[col] != nil {
-		indent = t.ColumnStates[col].YAMLIndent()
-	}
-
-	// Record editor ops so guides paint underneath and the recorded editor ops
-	// replay on top. The editor must be laid out first so Regions()/CaretPos()
-	// return valid positions.
-	macro := op.Record(gtx.Ops)
-	dims := LayoutEditor(gtx, t.Theme.Shaper, ed)
-	editorCall := macro.Stop()
-
-	t.drawIndentGuides(gtx, edText, &editors[entryIdx], indent)
-	editorCall.Add(gtx.Ops)
-
-	return dims
 }
 
 // hasAnyOverride returns true if any column has a non-empty editor for the given entry.
@@ -1218,311 +1053,6 @@ func (t *OverrideTable) CurrentParent(entries []service.FlatValueEntry, filtered
 	return ""
 }
 
-// indentGuide describes one vertical guide line: its indent level and
-// the range of text lines it spans.
-// layoutDefaultValue renders a read-only default value using our label
-// renderer (256-glyph batch) for correct anti-aliasing.
-func layoutDefaultValue(gtx layout.Context, th *material.Theme, editor *widget.Editor) layout.Dimensions {
-	// Render crisp text with our pixel-snapped label renderer.
-	lbl := material.Body2(th, editor.Text())
-	lbl.TextSize = viewerEditorTextSize
-	lbl.Alignment = editor.Alignment
-
-	m := op.Record(gtx.Ops)
-	lblDims := LayoutLabel(gtx, lbl)
-	lblCall := m.Stop()
-
-	// Overlay a transparent editor to preserve text selection and copy.
-	ed := material.Editor(th, editor, "")
-	ed.TextSize = viewerEditorTextSize
-	ed.Color = theme.ColorTransparent
-	ed.Editor.SingleLine = false
-
-	edM := op.Record(gtx.Ops)
-	edDims := LayoutEditor(gtx, th.Shaper, ed)
-	edCall := edM.Stop()
-
-	lblCall.Add(gtx.Ops)
-	edCall.Add(gtx.Ops)
-
-	return layout.Dimensions{
-		Size:     image.Pt(max(lblDims.Size.X, edDims.Size.X), max(lblDims.Size.Y, edDims.Size.Y)),
-		Baseline: edDims.Baseline,
-	}
-}
-
-type indentGuide struct {
-	level     int // indent depth (1-based)
-	firstLine int // first text line at this depth (0-based)
-	lastLine  int // last text line at this depth (0-based)
-}
-
-// ensureIndentBufs grows scratch buffers to hold at least n lines and
-// maxDepth guide descriptors.
-func (t *OverrideTable) ensureIndentBufs(n, maxGuides int) {
-	if cap(t.igDepths) < n {
-		t.igDepths = make([]int, n)
-		t.igYStart = make([]int, n)
-		t.igYEnd = make([]int, n)
-	}
-
-	t.igDepths = t.igDepths[:n]
-	t.igYStart = t.igYStart[:n]
-	t.igYEnd = t.igYEnd[:n]
-
-	if cap(t.igGuides) < maxGuides {
-		t.igGuides = make([]indentGuide, 0, maxGuides)
-	}
-
-	t.igGuides = t.igGuides[:0]
-}
-
-// drawIndentGuides draws vertical indentation guide lines in a multi-line
-// editor cell. Performs a single pass over the text to compute indent depths,
-// line Y positions, and guide ranges, then draws dotted lines.
-// Uses pre-allocated scratch buffers to avoid per-frame allocations.
-func (t *OverrideTable) drawIndentGuides(gtx layout.Context, edText string, editor *widget.Editor, indentUnit int) {
-	numLines := strings.Count(edText, "\n") + 1
-	if numLines <= 1 || indentUnit == 0 {
-		return
-	}
-
-	totalRunes := utf8.RuneCountInString(edText)
-
-	// Pre-allocate buffers. Use a reasonable initial guide capacity
-	// (indent depth rarely exceeds 8 in YAML).
-	const defaultMaxGuides = 8
-	t.ensureIndentBufs(numLines, defaultMaxGuides)
-
-	depths := t.igDepths
-	lineYStart := t.igYStart
-	lineYEnd := t.igYEnd
-
-	// Single pass: scan text to compute depths and Y positions together.
-	pxPerLevel := 0
-	maxDepth := 0
-	lineIdx := 0
-	runeOff := 0
-	lineRuneStart := 0
-	spaces := 0
-	counting := true
-	hasContent := false
-
-	for byteIdx := 0; byteIdx < len(edText); {
-		r, size := utf8.DecodeRuneInString(edText[byteIdx:])
-		byteIdx += size
-
-		if r == '\n' {
-			// Compute depth.
-			if !hasContent && lineIdx > 0 {
-				depths[lineIdx] = depths[lineIdx-1]
-			} else {
-				depths[lineIdx] = spaces / indentUnit
-			}
-
-			if depths[lineIdx] > maxDepth {
-				maxDepth = depths[lineIdx]
-			}
-
-			// Measure pixel width from the first indented line.
-			if pxPerLevel == 0 && spaces >= indentUnit {
-				pxPerLevel = t.measureIndentWidth(editor, lineRuneStart, indentUnit)
-			}
-
-			// Compute Y position for this line.
-			t.fillLineY(editor, lineIdx, lineRuneStart, runeOff, totalRunes, lineYStart, lineYEnd)
-
-			lineIdx++
-			runeOff++ // account for the '\n' rune
-			lineRuneStart = runeOff
-			spaces = 0
-			counting = true
-			hasContent = false
-
-			continue
-		}
-
-		if counting {
-			if r == ' ' {
-				spaces++
-			} else {
-				counting = false
-				hasContent = true
-			}
-		} else {
-			hasContent = true
-		}
-
-		runeOff++
-	}
-
-	// Process the final line.
-	if lineIdx < numLines {
-		if !hasContent && lineIdx > 0 {
-			depths[lineIdx] = depths[lineIdx-1]
-		} else {
-			depths[lineIdx] = spaces / indentUnit
-		}
-
-		if depths[lineIdx] > maxDepth {
-			maxDepth = depths[lineIdx]
-		}
-
-		if pxPerLevel == 0 && spaces >= indentUnit {
-			pxPerLevel = t.measureIndentWidth(editor, lineRuneStart, indentUnit)
-		}
-
-		t.fillLineY(editor, lineIdx, lineRuneStart, runeOff, totalRunes, lineYStart, lineYEnd)
-	}
-
-	if pxPerLevel == 0 || maxDepth == 0 {
-		return
-	}
-
-	// Build guide descriptors: for each indent level, find the first and
-	// last line at or deeper than that level.
-	for level := 1; level <= maxDepth; level++ {
-		first, last := -1, -1
-
-		for i, d := range depths[:numLines] {
-			if d >= level {
-				if first == -1 {
-					first = i
-				}
-
-				last = i
-			}
-		}
-
-		if first != -1 {
-			t.igGuides = append(t.igGuides, indentGuide{level: level, firstLine: first, lastLine: last})
-		}
-	}
-
-	if len(t.igGuides) == 0 {
-		return
-	}
-
-	// Find the cursor position to hide the guide at the cursor's indent column
-	// on the cursor line, so the caret stays visible.
-	caretLine, caretCol := editor.CaretPos()
-	// Integer division: hides the guide when the caret falls anywhere
-	// within that indent level's column span, keeping the caret area clear.
-	caretIndentLevel := caretCol / indentUnit
-
-	guideW := gtx.Dp(overrideIndentGuideW)
-	dotLen := gtx.Dp(overrideIndentDotLen)
-	dotGap := gtx.Dp(overrideIndentDotGap)
-	dotStep := dotLen + dotGap
-
-	if dotStep <= 0 {
-		dotStep = 1
-	}
-
-	for _, g := range t.igGuides {
-		x := g.level * pxPerLevel
-		yMin := lineYStart[g.firstLine]
-		yMax := lineYEnd[g.lastLine]
-
-		if yMax <= yMin {
-			continue
-		}
-
-		// Only skip the guide that matches the cursor's indent column on the cursor line.
-		skipCursorLine := g.level == caretIndentLevel &&
-			caretLine >= g.firstLine && caretLine <= g.lastLine
-
-		// Draw dotted line.
-		for y := yMin; y < yMax; y += dotStep {
-			segEnd := y + dotLen
-			if segEnd > yMax {
-				segEnd = yMax
-			}
-
-			if skipCursorLine {
-				cursorYMin := lineYStart[caretLine]
-				cursorYMax := lineYEnd[caretLine]
-
-				if segEnd > cursorYMin && y < cursorYMax {
-					continue
-				}
-			}
-
-			dot := clip.Rect{
-				Min: image.Pt(x, y),
-				Max: image.Pt(x+guideW, segEnd),
-			}.Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorIndentTick}.Add(gtx.Ops)
-			paint.PaintOp{}.Add(gtx.Ops)
-			dot.Pop()
-		}
-	}
-}
-
-// measureIndentWidth returns the pixel width of indentUnit spaces starting at
-// lineRuneStart, using editor.Regions. Returns 0 if the region cannot be measured.
-func (t *OverrideTable) measureIndentWidth(editor *widget.Editor, lineRuneStart, indentUnit int) int {
-	t.igRegions = editor.Regions(lineRuneStart, lineRuneStart+indentUnit, t.igRegions)
-	if len(t.igRegions) > 0 {
-		return t.igRegions[0].Bounds.Max.X - t.igRegions[0].Bounds.Min.X
-	}
-
-	return 0
-}
-
-// fillLineY computes the Y start/end for a single text line using editor.Regions.
-// For empty lines (or the first line when empty), it uses the nearest non-empty
-// line's height to avoid drift from compounding estimates. When no reference
-// line exists (e.g. first line is empty), it queries the editor for a fallback
-// line height.
-func (t *OverrideTable) fillLineY(
-	editor *widget.Editor,
-	lineIdx, lineRuneStart, lineRuneEnd, totalRunes int,
-	lineYStart, lineYEnd []int,
-) {
-	regionEnd := lineRuneEnd
-	if regionEnd > totalRunes {
-		regionEnd = totalRunes
-	}
-
-	if regionEnd > lineRuneStart {
-		t.igRegions = editor.Regions(lineRuneStart, lineRuneStart+1, t.igRegions)
-		if len(t.igRegions) > 0 {
-			lineYStart[lineIdx] = t.igRegions[0].Bounds.Min.Y
-			lineYEnd[lineIdx] = t.igRegions[0].Bounds.Max.Y
-
-			return
-		}
-	}
-
-	// Empty line (or Regions returned nothing): find the nearest non-empty
-	// line's height to avoid compounding estimation errors.
-	refH := 0
-	refEnd := 0
-
-	for back := lineIdx - 1; back >= 0; back-- {
-		h := lineYEnd[back] - lineYStart[back]
-		if h > 0 {
-			refH = h
-			refEnd = lineYEnd[back]
-
-			break
-		}
-	}
-
-	// Fallback for the first line (or all-empty prefix): query the editor
-	// for any character's region to get a line height estimate.
-	if refH == 0 && totalRunes > 0 {
-		t.igRegions = editor.Regions(0, 1, t.igRegions)
-		if len(t.igRegions) > 0 {
-			refH = t.igRegions[0].Bounds.Max.Y - t.igRegions[0].Bounds.Min.Y
-		}
-	}
-
-	lineYStart[lineIdx] = refEnd
-	lineYEnd[lineIdx] = refEnd + refH
-}
-
 // layoutScrollbarMarkers draws colored markers alongside the scrollbar for overridden entries.
 func (t *OverrideTable) layoutScrollbarMarkers(
 	gtx layout.Context,
@@ -1556,7 +1086,7 @@ func (t *OverrideTable) layoutScrollbarMarkers(
 			Min: image.Pt(scrollX, y),
 			Max: image.Pt(scrollX+markerW, y+markerH),
 		}.Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorScrollMarker}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.Override}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		rect.Pop()
 	}

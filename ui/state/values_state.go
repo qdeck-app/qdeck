@@ -126,6 +126,12 @@ func (c *CustomColumnState) HasOverrides() bool {
 	return c.overrideCount > 0
 }
 
+// OverrideCount returns the number of non-empty override entries in this column.
+// O(1) — reads the cached count maintained by MarkOverride / RebuildOverrideFlags.
+func (c *CustomColumnState) OverrideCount() int {
+	return c.overrideCount
+}
+
 // HasOverrideAt returns true if the entry at idx has a non-empty override.
 func (c *CustomColumnState) HasOverrideAt(idx int) bool {
 	return idx >= 0 && idx < len(c.overrideFlags) && c.overrideFlags[idx]
@@ -274,6 +280,13 @@ type ValuesPageState struct {
 	RenderOverridesButton widget.Clickable
 	RenderLoading         bool
 	ShowComments          widget.Bool
+
+	// ExtrasOnly is the toggle state for the "✚ extras-only" filter pill
+	// in the search bar. When true, FilterEntriesWithMultiOverrides only
+	// returns entries with IsCustomOnly == true (keys defined only in
+	// the overlay file with no chart-defaults counterpart).
+	ExtrasOnly        bool
+	ExtrasFilterClick widget.Clickable
 
 	// Helm install command (cached, rebuilt on chart/file changes)
 	HelmInstallCmd    string

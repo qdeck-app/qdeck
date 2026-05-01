@@ -15,17 +15,20 @@ const Typeface font.Typeface = "QDeck Mono"
 //nolint:gochecknoglobals // parsed once at init from embedded data
 var collection []font.FontFace
 
-func init() { //nolint:gochecknoinits // parsed once from embedded font data; trivial and side-effect-free
-	faces, err := opentype.ParseCollection(fontData)
-	if err != nil {
-		panic("failed to parse font: " + err.Error())
-	}
+//nolint:gochecknoinits // parsed once from embedded font data; trivial and side-effect-free
+func init() {
+	for _, data := range fontDataAll {
+		faces, err := opentype.ParseCollection(data)
+		if err != nil {
+			panic("failed to parse font: " + err.Error())
+		}
 
-	for i := range faces {
-		faces[i].Font.Typeface = Typeface
-	}
+		for i := range faces {
+			faces[i].Font.Typeface = Typeface
+		}
 
-	collection = faces
+		collection = append(collection, faces...)
+	}
 }
 
 func Collection() []font.FontFace {

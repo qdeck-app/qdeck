@@ -4,7 +4,6 @@ import (
 	"image"
 	"image/color"
 
-	"gioui.org/f32"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -24,6 +23,16 @@ func EdgeBorders(bounds image.Rectangle, w int) [4]image.Rectangle {
 		// Right
 		{Min: image.Pt(bounds.Max.X-w, bounds.Min.Y), Max: bounds.Max},
 	}
+}
+
+// paintRect fills a single rectangle with the supplied color. Convenience
+// helper for the four-edge border idiom (paint top, bottom, left, right
+// rects of one-pixel width).
+func paintRect(gtx layout.Context, r image.Rectangle, c color.NRGBA) {
+	stack := clip.Rect(r).Push(gtx.Ops)
+	paint.ColorOp{Color: c}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	stack.Pop()
 }
 
 // paintRowBg fills a full-width rectangle of the given height with the specified color.
@@ -47,6 +56,20 @@ func paintRowBgFrom(gtx layout.Context, xStart, height int, c color.NRGBA) {
 	rect.Pop()
 }
 
+// paintRowBgTo fills the row background from x=0 to xEnd, the mirror of
+// paintRowBgFrom — used for the key+default-value side. Lets the key
+// column carry a faint extras tint while the override side gets the
+// stronger extras-bg wash.
+func paintRowBgTo(gtx layout.Context, xEnd, height int, c color.NRGBA) {
+	rect := clip.Rect{
+		Min: image.Pt(0, 0),
+		Max: image.Pt(xEnd, height),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: c}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	rect.Pop()
+}
+
 const gitIndicatorWidth = 4
 
 // paintGitIndicator draws a narrow vertical bar at the given x position.
@@ -59,43 +82,16 @@ func paintGitIndicator(gtx layout.Context, x, height int, c color.NRGBA) {
 	rect.Pop()
 }
 
-// customOnlyGradientFade is the fraction of the row width over which the
-// section gradient transitions from c to white; past this point the row
-// is solid white. Keeping the colored band tight (10%) makes the marker
-// readable without dominating the row.
-const customOnlyGradientFade = 0.10
-
-// paintCustomOnlySectionGradient fills the row with a horizontal linear
-// gradient that runs from c (saturated, on the left) to white over the
-// first customOnlyGradientFade of the row width; the remaining width is
-// solid white. Used to flag a section header that exists only in an
-// override file — calls out the new subtree without obscuring downstream
-// content.
-func paintCustomOnlySectionGradient(gtx layout.Context, height int, c color.NRGBA) {
-	w := gtx.Constraints.Max.X
-	rect := clip.Rect{Max: image.Pt(w, height)}.Push(gtx.Ops)
-
-	fadeEnd := float32(w) * customOnlyGradientFade
-
-	paint.LinearGradientOp{
-		Stop1:  f32.Pt(0, 0),
-		Color1: c,
-		Stop2:  f32.Pt(fadeEnd, 0),
-		Color2: theme.ColorWhite,
-	}.Add(gtx.Ops)
-	paint.PaintOp{}.Add(gtx.Ops)
-	rect.Pop()
-}
-
-const customOnlyLeafBarWidth = 4
-
-// paintCustomOnlyLeafBar draws a saturated vertical bar on the row's left
-// edge marking a leaf key that exists only in an override file. Sections
-// with the same status take the wider gradient instead — together they
-// cover the legend's "override-only" entry on every affected row.
-func paintCustomOnlyLeafBar(gtx layout.Context, height int, c color.NRGBA) {
-	w := gtx.Dp(customOnlyLeafBarWidth)
-	rect := clip.Rect{Max: image.Pt(w, height)}.Push(gtx.Ops)
+// paintOverrideStrip draws a saturated vertical bar (StripeWidth wide) flush
+// against the override panel's left edge, full row height. The color
+// communicates the row's modification status: amber for manual override,
+// green for git-added, blue for git-modified.
+func paintOverrideStrip(gtx layout.Context, xStart, height int, c color.NRGBA) {
+	w := gtx.Dp(theme.Default.StripeWidth)
+	rect := clip.Rect{
+		Min: image.Pt(xStart, 0),
+		Max: image.Pt(xStart+w, height),
+	}.Push(gtx.Ops)
 	paint.ColorOp{Color: c}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	rect.Pop()
