@@ -602,6 +602,8 @@ func (vc *ValuesController) ResetState() {
 	vc.State.CollapsedPreSearch = nil
 	vc.State.SearchCollapseActive = false
 	vc.State.SearchEditor.SetText("")
+	vc.State.OverrideList.Position.First = 0
+	vc.State.OverrideList.Position.Offset = 0
 
 	for i := range vc.State.DefaultValueEditors {
 		vc.State.DefaultValueEditors[i].SetText("")
