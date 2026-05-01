@@ -482,7 +482,7 @@ func (d *AnchorDialog) layoutTextInput(
 				image.Rectangle{Max: image.Pt(gtx.Constraints.Max.X, inputH)},
 				inputRadius,
 			).Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorInputBorder}.Add(gtx.Ops)
+			paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 			border.Pop()
 
@@ -495,7 +495,7 @@ func (d *AnchorDialog) layoutTextInput(
 				),
 				inputRadius,
 			).Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorWhite}.Add(gtx.Ops)
+			paint.ColorOp{Color: theme.Default.White}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 			inner.Pop()
 
@@ -567,13 +567,13 @@ func (d *AnchorDialog) buildListChildren(th *material.Theme) []layout.FlexChild 
 
 				return layout.Stack{}.Layout(gtx,
 					layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-						bg := theme.ColorTransparent
+						bg := theme.Default.Transparent
 
 						switch {
 						case selected:
-							bg = theme.ColorFocus
+							bg = theme.Default.RowSelected
 						case click.Hovered():
-							bg = theme.ColorHover
+							bg = theme.Default.RowHover
 						}
 
 						// Inside Stack's Expanded pass, Constraints.Min equals
@@ -605,8 +605,8 @@ func (d *AnchorDialog) buildListChildren(th *material.Theme) []layout.FlexChild 
 func (d *AnchorDialog) layoutButtons(gtx layout.Context, th *material.Theme, mode AnchorDialogMode) layout.Dimensions {
 	cancel := layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 		btn := material.Button(th, &d.CancelBtn, "Cancel")
-		btn.Background = theme.ColorBtnCancel
-		btn.Color = theme.ColorTextPrimary
+		btn.Background = theme.Default.Bg3
+		btn.Color = theme.Default.Ink
 
 		return btn.Layout(gtx)
 	})
@@ -619,13 +619,13 @@ func (d *AnchorDialog) layoutButtons(gtx layout.Context, th *material.Theme, mod
 		// not "submit first visible" — so the OK button is redundant.
 		del := layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			btn := material.Button(th, &d.DeleteBtn, "Delete")
-			btn.Background = theme.ColorDanger
+			btn.Background = theme.Default.TrafficRed
 
 			return btn.Layout(gtx)
 		})
 		rename := layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			btn := material.Button(th, &d.RenameBtn, "Rename")
-			btn.Background = theme.ColorAccent
+			btn.Background = theme.Default.Ink
 
 			return btn.Layout(gtx)
 		})
@@ -635,7 +635,7 @@ func (d *AnchorDialog) layoutButtons(gtx layout.Context, th *material.Theme, mod
 
 	ok := layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 		btn := material.Button(th, &d.OKButton, "OK")
-		btn.Background = theme.ColorAccent
+		btn.Background = theme.Default.Ink
 
 		return btn.Layout(gtx)
 	})

@@ -37,6 +37,6 @@ func drawChevronTriangle(gtx layout.Context, slot image.Point, collapsed bool) {
 
 	defer clip.Outline{Path: p.End()}.Op().Push(gtx.Ops).Pop()
 
-	paint.ColorOp{Color: theme.ColorMuted}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Muted}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 }

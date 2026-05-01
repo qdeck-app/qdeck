@@ -42,12 +42,9 @@ const (
 
 	renderDefaultsLabelBase          = "Render with default values" //nolint:goconst // render label base
 	renderOverridesLabelBase         = "Render with all overrides"  //nolint:goconst // render label base
-	renderPlayIconSize       unit.Dp = 10
 	downloadIconSize         unit.Dp = 12
 	editorIconSize           unit.Dp = 12
-	renderIconSpacing        unit.Dp = 4
-	renderBtnPaddingH        unit.Dp = 10
-	renderBtnPaddingV        unit.Dp = 10
+	toolbarBtnGap            unit.Dp = 8 // gap between adjacent toolbar buttons
 
 	recentDropdownMaxH       unit.Dp = 250
 	recentDropdownPadH       unit.Dp = 12
@@ -67,6 +64,7 @@ const (
 	// header area so scrolling never resizes the list.
 	stickyParentStripH    unit.Dp = 24
 	stickyParentStripPadV unit.Dp = 4
+	stickyDiagGap         unit.Dp = 14 // gap between override / extras / encoding chips
 
 	recentItemPadV       unit.Dp = 2
 	showCommentsSize     unit.Dp = 18
@@ -90,9 +88,8 @@ const (
 	focusHighlightMaxAttempts = 60
 
 	// Hotkey + color-legend hint shown in the notification bar's idle slot.
-	helpLegendItemGap    unit.Dp = 10
-	helpGlyphTextGap     unit.Dp = 3
-	helpShortcutTrailGap unit.Dp = 10
+	helpLegendItemGap unit.Dp = 10
+	helpGlyphTextGap  unit.Dp = 3
 )
 
 // cellNavMod is the modifier for arrow-key cell navigation. On macOS we use
@@ -367,6 +364,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	p.State.FilteredIndices = p.Search.FilterEntriesWithMultiOverrides(
 		p.State.Entries,
 		p.columnEditorSlices[:p.State.ColumnCount],
+		p.State.ExtrasOnly,
 		p.State.FilteredIndices,
 	)
 
@@ -566,7 +564,22 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					searchHint := platform.ShortcutLabel("\u2318+F", "Ctrl+F")
-					dims := p.Search.Layout(gtx, p.Theme, "Search values... ("+searchHint+")")
+
+					if p.State.ExtrasFilterClick.Clicked(gtx) {
+						p.State.ExtrasOnly = !p.State.ExtrasOnly
+					}
+
+					dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return p.Search.Layout(gtx, p.Theme, "Search values... ("+searchHint+")")
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{Right: valuesSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								return customwidget.LayoutExtrasFilterPill(gtx, p.Theme, &p.State.ExtrasFilterClick, p.State.ExtrasOnly)
+							})
+						}),
+					)
+
 					totalRigidH += dims.Size.Y
 
 					return dims
@@ -616,7 +629,7 @@ func (p *ValuesPage) layoutParseErrors(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Left: valuesSpacing, Bottom: valuesPaddingSmall}.Layout(gtx,
 				func(gtx layout.Context) layout.Dimensions {
 					lbl := material.Caption(p.Theme, errMsg)
-					lbl.Color = theme.ColorError
+					lbl.Color = theme.Default.Danger
 
 					return customwidget.LayoutLabel(gtx, lbl)
 				})

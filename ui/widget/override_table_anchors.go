@@ -388,7 +388,7 @@ func (t *OverrideTable) layoutAnchorBadge(
 	}
 
 	lbl := material.Caption(t.Theme, sigil+info.Name)
-	lbl.Color = theme.ColorWhite
+	lbl.Color = theme.Default.White
 	lbl.MaxLines = 1
 
 	gap := gtx.Dp(overrideBadgeGap)

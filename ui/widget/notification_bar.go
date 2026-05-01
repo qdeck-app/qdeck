@@ -140,8 +140,8 @@ func (n *NotificationBar) Layout(
 
 func colorForLevel(level state.NotificationLevel) color.NRGBA {
 	if level == state.NotificationSuccess {
-		return theme.ColorStatsAdded
+		return theme.Default.Added
 	}
 
-	return theme.ColorError
+	return theme.Default.Danger
 }

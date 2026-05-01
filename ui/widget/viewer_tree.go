@@ -262,12 +262,12 @@ func (v *viewerWindow) layoutTreeList(gtx layout.Context, th *material.Theme) la
 				radius := gtx.Dp(viewerFileRadius)
 				bg := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
 
-				bgColor := theme.ColorHover
+				bgColor := theme.Default.RowHover
 				if isSelected {
 					bgColor = color.NRGBA{
-						R: theme.ColorAccent.R,
-						G: theme.ColorAccent.G,
-						B: theme.ColorAccent.B,
+						R: theme.Default.Override.R,
+						G: theme.Default.Override.G,
+						B: theme.Default.Override.B,
 						A: viewerActiveAlpha, //nolint:mnd // subtle active highlight
 					}
 				}
@@ -288,7 +288,7 @@ func (v *viewerWindow) layoutTreeList(gtx layout.Context, th *material.Theme) la
 					Min: image.Pt(x, 0),
 					Max: image.Pt(x+guideW, dims.Size.Y),
 				}.Push(gtx.Ops)
-				paint.ColorOp{Color: theme.ColorTreeGuide}.Add(gtx.Ops)
+				paint.ColorOp{Color: theme.Default.Guide}.Add(gtx.Ops)
 				paint.PaintOp{}.Add(gtx.Ops)
 				guide.Pop()
 			}
@@ -322,14 +322,14 @@ func (v *viewerWindow) layoutDirNode(
 	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Caption(th, icon)
-			lbl.Color = theme.ColorSecondary
+			lbl.Color = theme.Default.Muted
 
-			return layout.Inset{Right: treeToggleWidth / 4}.Layout(gtx, lbl.Layout) //nolint:mnd // quarter spacing
+			return layout.Inset{Right: treeToggleWidth / 4}.Layout(gtx, LabelWidget(lbl)) //nolint:mnd // quarter spacing
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			lbl := material.Caption(th, node.name)
 			lbl.MaxLines = 1
-			lbl.Color = theme.ColorSecondary
+			lbl.Color = theme.Default.Muted
 
 			return LayoutLabel(gtx, lbl)
 		}),
@@ -346,7 +346,7 @@ func (v *viewerWindow) layoutFileNode(
 	lbl.MaxLines = 1
 
 	if isSelected {
-		lbl.Color = theme.ColorAccent
+		lbl.Color = theme.Default.Override
 	}
 
 	return LayoutLabel(gtx, lbl)

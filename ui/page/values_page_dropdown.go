@@ -119,14 +119,14 @@ func (p *ValuesPage) layoutRecentDropdownCard(gtx layout.Context) layout.Dimensi
 	radius := gtx.Dp(recentDropdownRadius)
 
 	bgRect := clip.UniformRRect(cardBounds, radius).Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorDropdownBg}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Bg}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	bgRect.Pop()
 
 	// Subtle border.
 	borderW := gtx.Dp(recentDropdownBorder)
 
-	paintEdgeBorder(gtx, cardBounds, borderW, theme.ColorSeparator)
+	paintEdgeBorder(gtx, cardBounds, borderW, theme.Default.Border)
 
 	// Replay content on top.
 	c.Add(gtx.Ops)
@@ -152,7 +152,7 @@ func (p *ValuesPage) recentDropdownItems() []layout.FlexChild {
 								layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 									lbl := material.Caption(p.Theme, "")
 									lbl.Text = truncatePathLeft(&lbl, gtx, gtx.Constraints.Max.X, entry.Path)
-									lbl.Color = theme.ColorAccent
+									lbl.Color = theme.Default.Ink2
 									lbl.MaxLines = 1
 
 									return customwidget.LayoutLabel(gtx, lbl)
@@ -160,7 +160,7 @@ func (p *ValuesPage) recentDropdownItems() []layout.FlexChild {
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									return layoutActionButton(gtx, p.Theme,
 										&p.State.RecentValuesRemoveClicks[idx],
-										"x", theme.ColorDanger, valuesPaddingSmall)
+										"x", theme.Default.TrafficRed, valuesPaddingSmall)
 								}),
 							)
 						})

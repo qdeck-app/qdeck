@@ -2,6 +2,7 @@ package page
 
 import (
 	"image"
+	"image/color"
 
 	"gioui.org/io/event"
 	"gioui.org/io/pointer"
@@ -13,6 +14,18 @@ import (
 	"gioui.org/widget"
 
 	"github.com/qdeck-app/qdeck/ui/theme"
+)
+
+// Card drop-shadow layers — pure alpha overlays. Theme-agnostic; they
+// composite as a soft darken on whatever surface lies beneath. Inlined
+// here (the only consumer) instead of routed through theme.Default,
+// since the design tokens are explicitly OKLCH colors with hue and
+// these have no hue.
+//
+//nolint:mnd // 12/8 alpha values are inherent to the shadow design.
+var (
+	cardShadowOuter = color.NRGBA{A: 12}
+	cardShadowInner = color.NRGBA{A: 8}
 )
 
 const (
@@ -54,7 +67,7 @@ func layoutSectionCard(gtx layout.Context, w layout.Widget) layout.Dimensions {
 		paintCardShadow(gtx, bounds, radius)
 
 		bgRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorSectionCardBg}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.Bg2}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		bgRect.Pop()
 
@@ -78,7 +91,7 @@ func layoutStaticCard(gtx layout.Context, w layout.Widget) layout.Dimensions {
 		radius := gtx.Dp(cardCornerRadius)
 
 		bgRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorCardBg}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.Bg2}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		bgRect.Pop()
 
@@ -110,14 +123,14 @@ func layoutCardFocusable(gtx layout.Context, click *widget.Clickable, focused bo
 		paintCardShadow(gtx, bounds, radius)
 
 		bgRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorCardBg}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.Bg2}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		bgRect.Pop()
 
 		switch {
 		case focused:
 			focusRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorFocus}.Add(gtx.Ops)
+			paint.ColorOp{Color: theme.Default.RowSelected}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 			focusRect.Pop()
 
@@ -125,7 +138,7 @@ func layoutCardFocusable(gtx layout.Context, click *widget.Clickable, focused bo
 			paintFocusBorder(gtx, bounds, bw)
 		case hovered:
 			hoverRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorHover}.Add(gtx.Ops)
+			paint.ColorOp{Color: theme.Default.RowHover}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 			hoverRect.Pop()
 		}
@@ -158,7 +171,7 @@ func paintCardShadow(gtx layout.Context, bounds image.Rectangle, radius int) {
 	outer.Max.Y += offsetY + spread
 
 	outerClip := clip.UniformRRect(outer, radius+spread).Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorCardShadow1}.Add(gtx.Ops)
+	paint.ColorOp{Color: cardShadowOuter}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	outerClip.Pop()
 
@@ -167,7 +180,7 @@ func paintCardShadow(gtx layout.Context, bounds image.Rectangle, radius int) {
 	inner.Max.Y += offsetY / 2 //nolint:mnd // half of shadow offset
 
 	innerClip := clip.UniformRRect(inner, radius).Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorCardShadow2}.Add(gtx.Ops)
+	paint.ColorOp{Color: cardShadowInner}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	innerClip.Pop()
 }

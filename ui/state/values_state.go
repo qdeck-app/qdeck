@@ -126,6 +126,12 @@ func (c *CustomColumnState) HasOverrides() bool {
 	return c.overrideCount > 0
 }
 
+// OverrideCount returns the number of non-empty override entries in this column.
+// O(1) — reads the cached count maintained by MarkOverride / RebuildOverrideFlags.
+func (c *CustomColumnState) OverrideCount() int {
+	return c.overrideCount
+}
+
 // HasOverrideAt returns true if the entry at idx has a non-empty override.
 func (c *CustomColumnState) HasOverrideAt(idx int) bool {
 	return idx >= 0 && idx < len(c.overrideFlags) && c.overrideFlags[idx]
@@ -275,6 +281,13 @@ type ValuesPageState struct {
 	RenderLoading         bool
 	ShowComments          widget.Bool
 
+	// ExtrasOnly is the toggle state for the "✚ extras-only" filter pill
+	// in the search bar. When true, FilterEntriesWithMultiOverrides only
+	// returns entries with IsCustomOnly == true (keys defined only in
+	// the overlay file with no chart-defaults counterpart).
+	ExtrasOnly        bool
+	ExtrasFilterClick widget.Clickable
+
 	// Helm install command (cached, rebuilt on chart/file changes)
 	HelmInstallCmd    string
 	CopyInstallButton widget.Clickable
@@ -354,6 +367,12 @@ func (s *ValuesPageState) firstCustomValues() *service.FlatValues {
 // decorateWithCustomComments prepends a banner row, appends a trailer row,
 // and splices a foot-block row after every leaf that has a foot comment in
 // the user's custom values file. All three classes are EntryKindComment rows
+// commentEntryType is the synthetic Type tag used for orphan-comment rows
+// surfaced in the unified entry list. Distinct from the "string"/"bool"/etc
+// types of real chart values so the table can route comment rows through
+// layoutCommentRow rather than the leaf-cell path.
+const commentEntryType = "comment"
+
 // rendered as muted captions. Banner/trailer have empty FootAfterKey so
 // layoutCommentRow renders them unclamped; foot-block rows carry the leaf
 // key in FootAfterKey for save-time round-trip.
@@ -380,7 +399,7 @@ func (s *ValuesPageState) decorateWithCustomComments(entries []service.FlatValue
 	if hasBanner {
 		out = append(out, service.FlatValueEntry{
 			Kind:    service.EntryKindComment,
-			Type:    "comment",
+			Type:    commentEntryType,
 			Comment: service.CleanCommentForDisplay(cv.DocHeadComment),
 		})
 	}
@@ -395,7 +414,7 @@ func (s *ValuesPageState) decorateWithCustomComments(entries []service.FlatValue
 		if rawFoot, ok := cv.FootComments[e.Key]; ok && rawFoot != "" {
 			out = append(out, service.FlatValueEntry{
 				Kind:         service.EntryKindComment,
-				Type:         "comment",
+				Type:         commentEntryType,
 				Depth:        e.Depth,
 				Comment:      service.CleanCommentForDisplay(rawFoot),
 				FootAfterKey: e.Key,
@@ -406,7 +425,7 @@ func (s *ValuesPageState) decorateWithCustomComments(entries []service.FlatValue
 	if hasTrailer {
 		out = append(out, service.FlatValueEntry{
 			Kind:    service.EntryKindComment,
-			Type:    "comment",
+			Type:    commentEntryType,
 			Comment: service.CleanCommentForDisplay(cv.DocFootComment),
 		})
 	}

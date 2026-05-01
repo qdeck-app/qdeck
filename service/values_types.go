@@ -101,7 +101,7 @@ type FlatValueEntry struct {
 
 // IsSection returns true for entries that are section headers (non-leaf map/list nodes).
 func (e FlatValueEntry) IsSection() bool {
-	return e.Kind == EntryKindSection || (e.Value == "" && (e.Type == "map" || e.Type == "list"))
+	return e.Kind == EntryKindSection || (e.Value == "" && (e.Type == typeMap || e.Type == typeList))
 }
 
 // IsComment returns true for synthetic orphan-comment rows. These rows have no

@@ -28,6 +28,8 @@ const (
 	typeNumber  = "number"
 	typeNull    = "null"
 	typeUnknown = "unknown"
+	typeMap     = "map"
+	typeList    = "list"
 )
 
 type stackItem struct {
@@ -684,7 +686,7 @@ func flattenValues(source string, vals map[string]any) *domain.ValuesFile {
 		case map[string]any:
 			if len(typedVal) == 0 {
 				vf.Entries = append(vf.Entries, domain.ValuesEntry{
-					Key: domain.FlatKey(item.prefix), Value: "{}", Type: "map",
+					Key: domain.FlatKey(item.prefix), Value: "{}", Type: typeMap,
 				})
 
 				continue
@@ -693,7 +695,7 @@ func flattenValues(source string, vals map[string]any) *domain.ValuesFile {
 			// Emit section header for non-root maps.
 			if item.prefix != "" {
 				vf.Entries = append(vf.Entries, domain.ValuesEntry{
-					Key: domain.FlatKey(item.prefix), Type: "map",
+					Key: domain.FlatKey(item.prefix), Type: typeMap,
 				})
 			}
 
@@ -713,7 +715,7 @@ func flattenValues(source string, vals map[string]any) *domain.ValuesFile {
 		case []any:
 			if len(typedVal) == 0 {
 				vf.Entries = append(vf.Entries, domain.ValuesEntry{
-					Key: domain.FlatKey(item.prefix), Value: "[]", Type: "list",
+					Key: domain.FlatKey(item.prefix), Value: "[]", Type: typeList,
 				})
 
 				continue
@@ -722,7 +724,7 @@ func flattenValues(source string, vals map[string]any) *domain.ValuesFile {
 			// Emit section header for non-empty lists.
 			if item.prefix != "" {
 				vf.Entries = append(vf.Entries, domain.ValuesEntry{
-					Key: domain.FlatKey(item.prefix), Type: "list",
+					Key: domain.FlatKey(item.prefix), Type: typeList,
 				})
 			}
 			// Push in reverse order for correct index ordering.

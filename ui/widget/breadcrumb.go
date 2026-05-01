@@ -83,6 +83,27 @@ func (b *Breadcrumb) LayoutWithAction(gtx layout.Context, th *material.Theme, ac
 		return layout.Dimensions{}
 	}
 
+	// Record the inner content into a macro so we can paint the warm
+	// chrome background underneath. The Stack approach would also work
+	// but Stack adds a layout pass; record + replay keeps it to one.
+	contentMacro := op.Record(gtx.Ops)
+	contentDims := b.layoutContent(gtx, th, action)
+	contentCall := contentMacro.Stop()
+
+	bg := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, contentDims.Size.Y)}.Push(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Bg2}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	bg.Pop()
+
+	contentCall.Add(gtx.Ops)
+
+	return contentDims
+}
+
+// layoutContent renders the breadcrumb body + bottom border. Extracted
+// from LayoutWithAction so the chrome background can be painted via a
+// recorded macro on a single pass.
+func (b *Breadcrumb) layoutContent(gtx layout.Context, th *material.Theme, action layout.Widget) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			padV := gtx.Dp(breadcrumbPaddingV)
@@ -99,7 +120,7 @@ func (b *Breadcrumb) LayoutWithAction(gtx layout.Context, th *material.Theme, ac
 
 				children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return layout.Inset{Right: breadcrumbLogoGap}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						return LayoutLogo(gtx, breadcrumbLogoSize, theme.ColorAccent)
+						return LayoutLogo(gtx, breadcrumbLogoSize, theme.Default.Override)
 					})
 				})
 				n++
@@ -164,7 +185,7 @@ func (b *Breadcrumb) layoutSegment(gtx layout.Context, th *material.Theme, idx i
 	m := op.Record(gtx.Ops)
 	dims := seg.Click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		lbl := material.Body1(th, seg.Label)
-		lbl.Color = theme.ColorAccent
+		lbl.Color = theme.Default.Ink2
 
 		return LayoutLabel(gtx, lbl)
 	})
@@ -172,7 +193,7 @@ func (b *Breadcrumb) layoutSegment(gtx layout.Context, th *material.Theme, idx i
 
 	if hovered {
 		rect := clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops)
-		paint.ColorOp{Color: theme.ColorHover}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.RowHover}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		rect.Pop()
 	}
@@ -196,7 +217,7 @@ func (b *Breadcrumb) layoutSeparator(gtx layout.Context, th *material.Theme) lay
 		Left: breadcrumbSeparatorPad, Right: breadcrumbSeparatorPad,
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		lbl := material.Body1(th, "/")
-		lbl.Color = theme.ColorMuted
+		lbl.Color = theme.Default.Muted2
 
 		return LayoutLabel(gtx, lbl)
 	})
@@ -281,7 +302,7 @@ func (b *Breadcrumb) layoutBorder(gtx layout.Context) layout.Dimensions {
 	size := image.Pt(gtx.Constraints.Max.X, height)
 	rect := clip.Rect{Max: size}.Push(gtx.Ops)
 
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 
 	rect.Pop()

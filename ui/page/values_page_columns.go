@@ -2,9 +2,11 @@ package page
 
 import (
 	"image"
+	"image/color"
 	"path/filepath"
 	"strconv"
 
+	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -115,7 +117,7 @@ func (p *ValuesPage) layoutColumnHeaders(gtx layout.Context) layout.Dimensions {
 		Min: image.Pt(leftW, 0),
 		Max: image.Pt(leftW+divW, dims.Size.Y),
 	}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	vDiv.Pop()
 
@@ -134,7 +136,7 @@ func (p *ValuesPage) layoutColumnHeaders(gtx layout.Context) layout.Dimensions {
 				Min: image.Pt(x, 0),
 				Max: image.Pt(x+subDivW, dims.Size.Y),
 			}.Push(gtx.Ops)
-			paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+			paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 			subDiv.Pop()
 		}
@@ -144,7 +146,7 @@ func (p *ValuesPage) layoutColumnHeaders(gtx layout.Context) layout.Dimensions {
 	topLine := clip.Rect{
 		Max: image.Pt(viewportW, sepH),
 	}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	topLine.Pop()
 
@@ -153,18 +155,23 @@ func (p *ValuesPage) layoutColumnHeaders(gtx layout.Context) layout.Dimensions {
 		Min: image.Pt(0, dims.Size.Y-sepH),
 		Max: image.Pt(viewportW, dims.Size.Y),
 	}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	botLine.Pop()
 
 	return dims
 }
 
-// layoutStickyParent renders the fixed-height strip below the column headers
-// that surfaces the parent key path of the first visible row. Replacing the
-// previous in-list sticky header with this page-header strip keeps the table
-// list at a constant size regardless of scroll position, so scrolling can
-// never trigger a layout shift in the table body.
+// layoutStickyParent renders the fixed-height strip below the column headers.
+// Hosts two pieces of information:
+//
+//   - Left: the parent key path of the first visible row (replaces the
+//     previous in-list sticky header so scrolling can't trigger a list
+//     resize and a layout shift in the table body).
+//   - Right: per-column counts (overrides, extras) and the file encoding
+//     triplet — diagnostics that previously lived in a separate bottom
+//     status bar. Folding them in here gives the user one less band of
+//     chrome to scan and reuses the strip's existing 24dp footprint.
 func (p *ValuesPage) layoutStickyParent(gtx layout.Context) layout.Dimensions {
 	parent := p.Table.CurrentParent(p.State.Entries, p.State.FilteredIndices)
 
@@ -172,26 +179,33 @@ func (p *ValuesPage) layoutStickyParent(gtx layout.Context) layout.Dimensions {
 	stripH := gtx.Dp(stickyParentStripH)
 
 	bg := clip.Rect{Max: image.Pt(viewportW, stripH)}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorStickyHeader}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Bg2}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	bg.Pop()
 
-	if parent != "" {
-		labelGtx := gtx
-		labelGtx.Constraints.Min.Y = 0
-		labelGtx.Constraints.Max.Y = stripH
+	contentGtx := gtx
+	contentGtx.Constraints.Min.Y = 0
+	contentGtx.Constraints.Max.Y = stripH
 
-		layout.Inset{
-			Top: stickyParentStripPadV, Bottom: stickyParentStripPadV,
-			Left: valuesSpacing, Right: valuesSpacing,
-		}.Layout(labelGtx, func(gtx layout.Context) layout.Dimensions {
-			lbl := material.Body2(p.Theme, parent)
-			lbl.Color = theme.ColorSecondary
-			lbl.MaxLines = 1
+	layout.Inset{
+		Top: stickyParentStripPadV, Bottom: stickyParentStripPadV,
+		Left: valuesSpacing, Right: valuesSpacing,
+	}.Layout(contentGtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				if parent == "" {
+					return layout.Dimensions{Size: image.Pt(gtx.Constraints.Min.X, 0)}
+				}
 
-			return customwidget.LayoutLabel(gtx, lbl)
-		})
-	}
+				lbl := material.Body2(p.Theme, parent)
+				lbl.Color = theme.Default.Muted
+				lbl.MaxLines = 1
+
+				return customwidget.LayoutLabel(gtx, lbl)
+			}),
+			layout.Rigid(p.layoutStickyDiagnostics),
+		)
+	})
 
 	sepH := gtx.Dp(valuesSeparatorHeight)
 
@@ -199,11 +213,109 @@ func (p *ValuesPage) layoutStickyParent(gtx layout.Context) layout.Dimensions {
 		Min: image.Pt(0, stripH-sepH),
 		Max: image.Pt(viewportW, stripH),
 	}.Push(gtx.Ops)
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	sep.Pop()
 
 	return layout.Dimensions{Size: image.Pt(viewportW, stripH)}
+}
+
+// layoutStickyDiagnostics is the right-aligned half of the sticky parent
+// strip — the override / extras / encoding triplet previously hosted in
+// the separate bottom status bar.
+func (p *ValuesPage) layoutStickyDiagnostics(gtx layout.Context) layout.Dimensions {
+	overrideCount, extraCount := p.diagnosticCounts()
+
+	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+		layout.Rigid(p.layoutDiagnosticText(overrideCountLabel(overrideCount), theme.Default.Muted)),
+		layout.Rigid(layout.Spacer{Width: stickyDiagGap}.Layout),
+		layout.Rigid(p.layoutDiagnosticText(extraCountLabel(extraCount), theme.Default.Muted)),
+		layout.Rigid(layout.Spacer{Width: stickyDiagGap}.Layout),
+		layout.Rigid(p.layoutDiagnosticText("UTF-8 · LF · YAML", theme.Default.Muted2)),
+	)
+}
+
+func (p *ValuesPage) layoutDiagnosticText(txt string, col color.NRGBA) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		if txt == "" {
+			return layout.Dimensions{}
+		}
+
+		lbl := material.Label(p.Theme, theme.Default.SizeSM, txt)
+		lbl.Color = col
+		lbl.Font.Weight = font.Normal
+		lbl.MaxLines = 1
+
+		return customwidget.LayoutLabel(gtx, lbl)
+	}
+}
+
+// diagnosticCounts returns (overrideCount, extraCount) for the sticky
+// parent strip. Both are O(N) over entries / column states; called once
+// per frame on the sticky strip so the cost is negligible.
+func (p *ValuesPage) diagnosticCounts() (overrides, extras int) {
+	for c := range p.State.Columns {
+		overrides += p.State.Columns[c].OverrideCount()
+	}
+
+	for i := range p.State.Entries {
+		if p.State.Entries[i].IsCustomOnly {
+			extras++
+		}
+	}
+
+	return overrides, extras
+}
+
+// overrideCountLabel and extraCountLabel mirror the helpers that lived
+// in the deleted status_bar widget; kept here as the only consumer is
+// now the sticky parent diagnostics.
+func overrideCountLabel(n int) string {
+	switch n {
+	case 0:
+		return ""
+	case 1:
+		return "1 override"
+	default:
+		return formatStickyCount(n) + " overrides"
+	}
+}
+
+func extraCountLabel(n int) string {
+	if n == 0 {
+		return ""
+	}
+
+	if n == 1 {
+		return "✚1 extra"
+	}
+
+	return "✚" + formatStickyCount(n) + " extras"
+}
+
+// formatStickyCount stringifies a non-negative count. Hand-rolled to
+// keep the per-frame diagnostics path off fmt.Sprintf and its allocator.
+//
+//nolint:mnd // 10 is the decimal base, 20 is the max digits in an int64.
+func formatStickyCount(n int) string {
+	if n == 0 {
+		return "0"
+	}
+
+	const maxDigits = 20
+
+	var (
+		buf [maxDigits]byte
+		i   = len(buf)
+	)
+
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+
+	return string(buf[i:])
 }
 
 // layoutColumnFileStatuses renders per-column file statuses (no trailing buttons).
@@ -408,9 +520,9 @@ func (p *ValuesPage) layoutColumnFileStatus(gtx layout.Context, colIdx int) layo
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Left: valuesPaddingSmall}.Layout(gtx,
 				func(gtx layout.Context) layout.Dimensions {
-					iconColor := theme.ColorAccent
+					iconColor := theme.Default.Override
 					if col.OpenInEditorButton.Hovered() {
-						iconColor = theme.ColorAccentHover
+						iconColor = theme.Default.OverrideStrong
 					}
 
 					return layoutIconButton(gtx, p.Theme, &col.OpenInEditorButton,

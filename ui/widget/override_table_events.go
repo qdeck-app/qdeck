@@ -96,32 +96,53 @@ func (t *OverrideTable) processEditorChanges(
 			t.drainEditorEvents(gtx, &editors[entryIdx])
 		}
 
-		if t.ColumnStates[c] != nil {
-			t.ColumnStates[c].MarkOverride(entryIdx, state.StripYAMLComments(editors[entryIdx].Text()) != "")
-		}
+		t.commitOverrideUpdate(gtx, c, entryIdx, entryKey, entries)
+	}
+}
 
-		t.propagateAnchoredValueEdit(gtx, c, entryKey, entries, editors)
+// commitOverrideUpdate refreshes the override flag, propagates the change
+// into any sibling alias cells, then serializes the column to YAML and
+// fires OnChanged. Shared between processEditorChanges (user typing) and
+// programmatic mutations like the bool switch (which mutate via SetText
+// and don't generate a ChangeEvent).
+func (t *OverrideTable) commitOverrideUpdate(
+	gtx layout.Context,
+	c, entryIdx int,
+	entryKey string,
+	entries []service.FlatValueEntry,
+) {
+	editors := t.ColumnEditors[c]
+	if entryIdx >= len(editors) {
+		return
+	}
 
-		if t.OnChanged != nil {
-			indent := service.DefaultYAMLIndent
+	if t.ColumnStates[c] != nil {
+		t.ColumnStates[c].MarkOverride(entryIdx, state.StripYAMLComments(editors[entryIdx].Text()) != "")
+	}
 
-			var (
-				tree *yaml.Node
-				docs service.DocComments
-			)
+	t.propagateAnchoredValueEdit(gtx, c, entryKey, entries, editors)
 
-			if cs := t.ColumnStates[c]; cs != nil {
-				indent = cs.YAMLIndent()
-				if cs.CustomValues != nil {
-					tree = cs.CustomValues.NodeTree
-					docs = cs.DocCommentsForSave()
-				}
-			}
+	if t.OnChanged == nil {
+		return
+	}
 
-			yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree, docs)
-			t.OnChanged(c, yamlText, yamlErr)
+	indent := service.DefaultYAMLIndent
+
+	var (
+		tree *yaml.Node
+		docs service.DocComments
+	)
+
+	if cs := t.ColumnStates[c]; cs != nil {
+		indent = cs.YAMLIndent()
+		if cs.CustomValues != nil {
+			tree = cs.CustomValues.NodeTree
+			docs = cs.DocCommentsForSave()
 		}
 	}
+
+	yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree, docs)
+	t.OnChanged(c, yamlText, yamlErr)
 }
 
 // drainEditorEvents consumes pending editor events so a programmatic SetText

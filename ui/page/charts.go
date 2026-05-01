@@ -146,7 +146,7 @@ func (p *ChartsPage) layoutChartList(gtx layout.Context) layout.Dimensions {
 								layout.Rigid(layout.Spacer{Width: chartSpacerSmall}.Layout),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									lbl := material.Caption(p.Theme, chart.LatestVersion())
-									lbl.Color = theme.ColorAccent
+									lbl.Color = theme.Default.Ink2
 
 									return customwidget.LayoutLabel(gtx, lbl)
 								}),
@@ -154,7 +154,7 @@ func (p *ChartsPage) layoutChartList(gtx layout.Context) layout.Dimensions {
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							lbl := material.Caption(p.Theme, chart.Description)
-							lbl.Color = theme.ColorSecondary
+							lbl.Color = theme.Default.Muted
 							lbl.MaxLines = 2
 
 							return customwidget.LayoutLabel(gtx, lbl)
@@ -218,7 +218,7 @@ func (p *ChartsPage) layoutVersions(gtx layout.Context) layout.Dimensions {
 										}),
 										layout.Flexed(chartVersionFlex, func(gtx layout.Context) layout.Dimensions {
 											lbl := material.Caption(p.Theme, ver.Created.Format(chartDateFormat))
-											lbl.Color = theme.ColorSecondary
+											lbl.Color = theme.Default.Muted
 
 											return customwidget.LayoutLabel(gtx, lbl)
 										}),

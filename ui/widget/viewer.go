@@ -469,7 +469,7 @@ func (v *viewerWindow) layoutTitleBar(gtx layout.Context, th *material.Theme) la
 				lbl := material.Body2(th, v.title)
 				lbl.Font.Weight = viewerTitleWeight
 
-				return lbl.Layout(gtx)
+				return LayoutLabel(gtx, lbl)
 			})
 
 			area := clip.Rect{Max: dims.Size}.Push(gtx.Ops)
@@ -570,7 +570,7 @@ func (v *viewerWindow) layoutSeparator(gtx layout.Context) layout.Dimensions {
 	size := image.Pt(gtx.Constraints.Max.X, gtx.Dp(viewerSeparatorH))
 	rect := clip.Rect{Max: size}.Push(gtx.Ops)
 
-	paint.ColorOp{Color: theme.ColorSeparator}.Add(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
 	rect.Pop()
 

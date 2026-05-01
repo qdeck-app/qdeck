@@ -5,6 +5,10 @@ import (
 	"testing"
 )
 
+// yamlTrueLiteral is the YAML scalar form of boolean true. Shared across
+// service test files so goconst doesn't flag duplication.
+const yamlTrueLiteral = "true"
+
 // TestRoundTripCornerCases is the headline regression for the comment +
 // anchor preservation work. The inline source below is a condensed
 // counterpart to test-data/redis-values-cornercases.yaml — it exercises the
@@ -64,16 +68,22 @@ deep:
 	// parser handles — anchors / merge sources are physical leaves but
 	// merge keys themselves aren't user-edited, so we don't add them to
 	// `want`. A real save flow does the same via collectOverrides.
+	const (
+		fixtureRegistry  = "my-registry.example.com"
+		fixtureDeepValue = "deep-value"
+		fixtureFootCheck = "foot block on storageClass"
+	)
+
 	entries := []OverrideEntry{
-		{Key: "x-defaults.enabled", Value: "true", Type: "bool"},
+		{Key: "x-defaults.enabled", Value: yamlTrueLiteral, Type: typeBool},
 		{Key: "x-defaults.replicas", Value: "1", Type: "int"},
-		{Key: "x-extra.tier", Value: "gold", Type: "string"},
-		{Key: "global.imageRegistry", Value: "my-registry.example.com", Type: "string"},
-		{Key: "global.storageClass", Value: "standard-rwo", Type: "string"},
-		{Key: "primary.resources.cpu", Value: "100m", Type: "string"},
-		{Key: "primary.resources.memory", Value: "128Mi", Type: "string"},
-		{Key: "replica.enabled", Value: "false", Type: "bool"},
-		{Key: "deep.level1.level2.level3.leaf", Value: "deep-value", Type: "string"},
+		{Key: "x-extra.tier", Value: "gold", Type: typeString},
+		{Key: "global.imageRegistry", Value: fixtureRegistry, Type: typeString},
+		{Key: "global.storageClass", Value: "standard-rwo", Type: typeString},
+		{Key: "primary.resources.cpu", Value: "100m", Type: typeString},
+		{Key: "primary.resources.memory", Value: "128Mi", Type: typeString},
+		{Key: "replica.enabled", Value: "false", Type: typeBool},
+		{Key: "deep.level1.level2.level3.leaf", Value: fixtureDeepValue, Type: typeString},
 	}
 
 	got, err := PatchNodeTree(tree, entries, DefaultYAMLIndent, docs)
@@ -85,15 +95,15 @@ deep:
 		name     string
 		contains string
 	}{
-		{"patched value", "my-registry.example.com"},
+		{"patched value", fixtureRegistry},
 		{"banner", "Banner block"},
 		{"anchor &defaults", "&defaults"},
 		{"anchor &extra", "&extra"},
 		{"merge key directive", "<<:"},
 		{"alias reference *defaults", "*defaults"},
 		{"alias reference *extra", "*extra"},
-		{"foot block on storageClass", "foot block on storageClass"},
-		{"deep nesting leaf", "deep-value"},
+		{"foot block on storageClass", fixtureFootCheck},
+		{"deep nesting leaf", fixtureDeepValue},
 	}
 
 	for _, c := range checks {
