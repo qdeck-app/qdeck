@@ -1,6 +1,10 @@
 package state
 
-import "time"
+import (
+	"context"
+	"errors"
+	"time"
+)
 
 // NotificationLevel distinguishes error notifications from success notifications.
 type NotificationLevel uint8
@@ -35,4 +39,30 @@ func (n *NotificationState) IsExpired(now time.Time, timeout time.Duration) bool
 func (n *NotificationState) Clear() {
 	n.Message = ""
 	n.Active = false
+}
+
+// RecordLoadOutcome routes the result of an async load to the persistent
+// errSlot (when non-nil) and the transient notification bar. A
+// context.DeadlineExceeded error is prefixed with "Operation timed out: "
+// before either destination so generic Application-level polling and bespoke
+// per-controller polling produce identical user-visible text.
+func RecordLoadOutcome(err error, errSlot *string, notif *NotificationState) {
+	if err == nil {
+		if errSlot != nil {
+			*errSlot = ""
+		}
+
+		return
+	}
+
+	msg := err.Error()
+	if errors.Is(err, context.DeadlineExceeded) {
+		msg = "Operation timed out: " + msg
+	}
+
+	if errSlot != nil {
+		*errSlot = msg
+	}
+
+	notif.Show(msg, NotificationError, time.Now())
 }

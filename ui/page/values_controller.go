@@ -234,32 +234,37 @@ func (vc *ValuesController) PollAsync() {
 }
 
 func (vc *ValuesController) pollDefaultValues() {
-	if res, ok := vc.DefaultValuesRunner.Poll(); ok {
-		vc.State.Loading = false
+	res, ok := vc.DefaultValuesRunner.Poll()
+	if !ok {
+		return
+	}
 
-		if res.Err != nil {
-			vc.NotifState.Show(res.Err.Error(), state.NotificationError, time.Now())
-		} else {
-			vc.State.DefaultValues = res.Value
+	vc.State.Loading = false
 
-			// Restore the previously focused cell for this chart so the user
-			// resumes where they left off across app restarts. Load is async
-			// to avoid blocking the frame loop on a file read that may
-			// contend with the debounced save mutex.
-			vc.loadSavedCellFocusAsync()
+	state.RecordLoadOutcome(res.Err, &vc.State.LoadError, vc.NotifState)
 
-			vc.rebuildEntries(-1)
+	if res.Err != nil {
+		return
+	}
 
-			// Auto-load a values file queued from the repos page drop zone.
-			if vc.NavState.PendingValuesPath != "" {
-				path := vc.NavState.PendingValuesPath
-				vc.NavState.PendingValuesPath = ""
-				vc.OnColumnFilesSelected(0, []string{path})
+	vc.State.DefaultValues = res.Value
 
-				if vc.OnPendingValuesConsumed != nil {
-					vc.OnPendingValuesConsumed(path)
-				}
-			}
+	// Restore the previously focused cell for this chart so the user
+	// resumes where they left off across app restarts. Load is async
+	// to avoid blocking the frame loop on a file read that may
+	// contend with the debounced save mutex.
+	vc.loadSavedCellFocusAsync()
+
+	vc.rebuildEntries(-1)
+
+	// Auto-load a values file queued from the repos page drop zone.
+	if vc.NavState.PendingValuesPath != "" {
+		path := vc.NavState.PendingValuesPath
+		vc.NavState.PendingValuesPath = ""
+		vc.OnColumnFilesSelected(0, []string{path})
+
+		if vc.OnPendingValuesConsumed != nil {
+			vc.OnPendingValuesConsumed(path)
 		}
 	}
 }
@@ -585,6 +590,7 @@ func (vc *ValuesController) ResetState() {
 	vc.viewerLink = nil
 	vc.lastRenderMode = renderNone
 	vc.State.Loading = true
+	vc.State.LoadError = ""
 	vc.State.DefaultValues = nil
 	vc.State.Entries = nil
 	vc.State.PendingFocusKey = ""

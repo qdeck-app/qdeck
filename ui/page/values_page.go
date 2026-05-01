@@ -289,6 +289,10 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 			return layoutCenteredLoading(gtx, p.Theme)
 		}
 
+		if p.State.LoadError != "" {
+			return layoutCenteredError(gtx, p.Theme, "Failed to load chart", p.State.LoadError)
+		}
+
 		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return customwidget.LayoutLabel(gtx, material.Body1(p.Theme, "No chart selected"))
 		})
