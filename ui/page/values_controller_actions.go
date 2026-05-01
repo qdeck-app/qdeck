@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"gioui.org/layout"
@@ -46,6 +47,27 @@ func (vc *ValuesController) HandleRenderOverrides() {
 func (vc *ValuesController) OnColumnFilesSelected(colIdx int, paths []string) {
 	if colIdx < 0 || colIdx >= vc.State.ColumnCount || len(paths) == 0 {
 		return
+	}
+
+	for _, p := range paths {
+		cleaned := filepath.Clean(p)
+
+		for c := range vc.State.ColumnCount {
+			if c == colIdx {
+				continue
+			}
+
+			for _, existing := range vc.State.Columns[c].CustomFilePaths {
+				if filepath.Clean(existing) != cleaned {
+					continue
+				}
+
+				msg := fmt.Sprintf("Already open in column %d: %s — selection skipped", c+1, filepath.Base(p))
+				vc.NotifState.Show(msg, state.NotificationError, time.Now())
+
+				return
+			}
+		}
 	}
 
 	col := &vc.State.Columns[colIdx]
@@ -146,7 +168,22 @@ func (vc *ValuesController) onOpenInEditor(colIdx int) {
 }
 
 func (vc *ValuesController) onSelectRecentValues(path string) {
-	vc.OnColumnFilesSelected(0, []string{path})
+	// Route to the first empty column so users can stack a recent file into a
+	// freshly-added column. Falls back to the focused column when every column
+	// is populated — overwriting where the user is actively working matches
+	// "load this here" intent better than clobbering column 0, and the
+	// duplicate guard in OnColumnFilesSelected still rejects a re-pick of a
+	// file already loaded in a different column.
+	target := vc.State.FocusedCol
+	for c := range vc.State.ColumnCount {
+		if len(vc.State.Columns[c].CustomFilePaths) == 0 {
+			target = c
+
+			break
+		}
+	}
+
+	vc.OnColumnFilesSelected(target, []string{path})
 }
 
 //nolint:dupl // same Runner pattern as addRecentChart but calls different service method on different receiver.
