@@ -115,29 +115,29 @@ func (s *RecentService) RemoveRecentValues(ctx context.Context, idx int) error {
 	)
 }
 
-// LoadShowComments returns the persisted "show comments" preference.
+// LoadShowDocs returns the persisted "show docs" preference.
 // Returns false when the preference has never been saved.
-func (s *RecentService) LoadShowComments(ctx context.Context) (bool, error) {
+func (s *RecentService) LoadShowDocs(ctx context.Context) (bool, error) {
 	data, err := s.store.Load(ctx)
 	if err != nil {
-		return false, fmt.Errorf("load show comments: %w", err)
+		return false, fmt.Errorf("load show docs: %w", err)
 	}
 
-	if data.ShowComments == nil {
+	if data.ShowDocs == nil {
 		return false, nil
 	}
 
-	return *data.ShowComments, nil
+	return *data.ShowDocs, nil
 }
 
-// SaveShowComments persists the "show comments" preference.
-func (s *RecentService) SaveShowComments(ctx context.Context, show bool) error {
+// SaveShowDocs persists the "show docs" preference.
+func (s *RecentService) SaveShowDocs(ctx context.Context, show bool) error {
 	if err := s.store.Update(ctx, func(data *storage.AppData) error {
-		data.ShowComments = &show
+		data.ShowDocs = &show
 
 		return nil
 	}); err != nil {
-		return fmt.Errorf("save show comments: %w", err)
+		return fmt.Errorf("save show docs: %w", err)
 	}
 
 	return nil

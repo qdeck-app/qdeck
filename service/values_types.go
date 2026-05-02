@@ -85,6 +85,14 @@ type FlatValueEntry struct {
 	Comment string
 	Kind    EntryKind
 
+	// DefaultComment is the chart-side head/line comment authored above this
+	// key in the chart's default values.yaml. Survives RebuildUnifiedEntries
+	// (which rewrites Comment to reflect the user's overlay file) so the left
+	// panel can render chart documentation independently from the right
+	// panel's user annotations. Empty when the chart didn't document the key,
+	// and always empty for IsCustomOnly entries (no chart counterpart).
+	DefaultComment string
+
 	// FootAfterKey is set only for EntryKindComment rows. It holds the flat key
 	// of the leaf whose value the comment block sits *after* in the source
 	// file. The serializer uses this to write the text back as that leaf's
@@ -115,6 +123,16 @@ func (e FlatValueEntry) IsComment() bool {
 // neither hosts a value editor.
 func (e FlatValueEntry) IsFocusable() bool {
 	return !e.IsSection() && !e.IsComment()
+}
+
+// IsEmptyContainer reports whether this entry is a container key with no
+// children — flattenValues emits "{}" for an empty mapping and "[]" for an
+// empty sequence, distinguishable from a populated-container section header
+// (which has Value=""). Used by the unified-entries merge to detect a shape
+// mismatch when an overlay populates a key that the chart left empty.
+func (e FlatValueEntry) IsEmptyContainer() bool {
+	return (e.Type == typeMap && e.Value == emptyMapValue) ||
+		(e.Type == typeList && e.Value == emptyListValue)
 }
 
 type DiffResult struct {

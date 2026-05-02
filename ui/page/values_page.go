@@ -66,9 +66,9 @@ const (
 	stickyParentStripPadV unit.Dp = 4
 	stickyDiagGap         unit.Dp = 14 // gap between override / extras / encoding chips
 
-	recentItemPadV       unit.Dp = 2
-	showCommentsSize     unit.Dp = 18
-	showCommentsTextMult float32 = 0.85
+	recentItemPadV   unit.Dp = 2
+	showDocsSize     unit.Dp = 18
+	showDocsTextMult float32 = 0.85
 
 	maxRecentValues = 10 // must match service/recent_service.go
 
@@ -132,7 +132,7 @@ type ValuesPageCallbacks struct {
 	OnRenderDefaults        func()
 	OnRenderOverrides       func()
 	OnKeyCopied             func(key string)
-	OnShowCommentsChanged   func(show bool)
+	OnShowDocsChanged       func(show bool)
 	// OnCellFocusChanged fires when (FocusedRow, FocusedCol) actually change.
 	// entryKey is the flat key of the focused entry (stable across sessions
 	// and filter changes); empty when no entry is resolvable at row.
@@ -310,7 +310,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	// Wire the table editors from column state.
 	p.Table.DefaultValueEditors = p.State.DefaultValueEditors
 	p.Table.ColumnCount = p.State.ColumnCount
-	p.Table.ShowComments = p.State.ShowComments.Value
+	p.Table.ShowDocs = p.State.ShowDocs.Value
 
 	if p.State.DefaultValues != nil {
 		p.Table.DefaultAnchors = p.State.DefaultValues.Anchors

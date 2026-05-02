@@ -30,7 +30,7 @@ const commentSourceCol = 0
 // Foot-block rows clamp to overrideCommentMaxLines so a 20-line YAML example
 // commented out for documentation can't dominate the table; banner and
 // trailer rows render unclamped because the user explicitly typed them at
-// file scope and wants the full text visible. ShowComments is NOT consulted —
+// file scope and wants the full text visible. ShowDocs is NOT consulted —
 // these are first-class user annotations on their own file, not chart-side
 // documentation noise.
 //
@@ -156,7 +156,7 @@ func (t *OverrideTable) layoutCommentEditor(gtx layout.Context, entryIdx, _ int)
 
 	ed := material.Editor(t.Theme, &editors[entryIdx], "")
 	ed.Color = theme.Default.Muted
-	ed.TextSize = viewerEditorTextSize
+	ed.TextSize = theme.Default.SizeXL
 
 	return LayoutEditor(gtx, t.Theme.Shaper, ed)
 }

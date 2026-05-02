@@ -33,8 +33,8 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 		p.OnRenderOverrides()
 	}
 
-	if p.State.ShowComments.Update(gtx) && p.OnShowCommentsChanged != nil {
-		p.OnShowCommentsChanged(p.State.ShowComments.Value)
+	if p.State.ShowDocs.Update(gtx) && p.OnShowDocsChanged != nil {
+		p.OnShowDocsChanged(p.State.ShowDocs.Value)
 	}
 
 	if p.State.SaveChartButton.Clicked(gtx) && p.OnSaveChart != nil {
@@ -93,13 +93,13 @@ func (p *ValuesPage) layoutRenderButtons(gtx layout.Context) layout.Dimensions {
 
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Left: valuesSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				cb := material.CheckBox(p.Theme, &p.State.ShowComments, "Show comments")
-				cb.Size = showCommentsSize
-				cb.TextSize = unit.Sp(float32(p.Theme.TextSize) * showCommentsTextMult)
+				cb := material.CheckBox(p.Theme, &p.State.ShowDocs, "Show docs")
+				cb.Size = showDocsSize
+				cb.TextSize = unit.Sp(float32(p.Theme.TextSize) * showDocsTextMult)
 
 				dims := cb.Layout(gtx)
 
-				pushPointerCursor(gtx, dims, &p.State.ShowComments)
+				pushPointerCursor(gtx, dims, &p.State.ShowDocs)
 
 				return dims
 			})

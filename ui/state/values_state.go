@@ -287,7 +287,7 @@ type ValuesPageState struct {
 	RenderDefaultsButton  widget.Clickable
 	RenderOverridesButton widget.Clickable
 	RenderLoading         bool
-	ShowComments          widget.Bool
+	ShowDocs              widget.Bool
 
 	// ExtrasOnly is the toggle state for the "✚ extras-only" filter pill
 	// in the search bar. When true, FilterEntriesWithMultiOverrides only
@@ -501,11 +501,22 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 		defaultKeys[defaults[i].Key] = struct{}{}
 	}
 
-	// Collect both: custom-only entries (keys absent from defaults) and
-	// overlap-key comments (keys in defaults that the custom file annotates).
-	// First occurrence across columns wins for both.
+	// Collect three things from overlay entries:
+	//   - customOnly:        keys absent from defaults (will become extras rows)
+	//   - customComments:    keys in defaults that the overlay annotates
+	//   - populatedSections: defaults keys that the overlay populates as a
+	//                        non-empty mapping/sequence header. When defaults
+	//                        declared the key as an empty container (`{}` /
+	//                        `[]`), the unified row needs to be promoted from
+	//                        a leaf-shaped placeholder to a real section so
+	//                        the section-comment editor and section-row
+	//                        layout kick in. Without this promotion, an
+	//                        overlay-side annotation on the key has nowhere
+	//                        to render and the children appear orphaned.
+	// First occurrence across columns wins for customOnly/customComments.
 	customOnly := make(map[string]service.FlatValueEntry)
 	customComments := make(map[string]string)
+	populatedSections := make(map[string]struct{})
 
 	for c := range s.ColumnCount {
 		cv := s.Columns[c].CustomValues
@@ -527,6 +538,10 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 					if _, seen := customComments[e.Key]; !seen {
 						customComments[e.Key] = e.Comment
 					}
+				}
+
+				if e.IsSection() {
+					populatedSections[e.Key] = struct{}{}
 				}
 
 				continue
@@ -568,8 +583,16 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 	// custom-side Comment from the source file's parseComments. Together this
 	// guarantees every entry's Comment field reflects only the user's values
 	// file annotations — defaults-side comments are never visible.
+	//
+	// promoteEmptyContainersToSections then flips defaults entries from leaf-
+	// shaped placeholders ({} / []) to true sections when the overlay
+	// populates them. Must run before merge+sort so the row's IsSection()
+	// status is right by the time SortByFilePositions runs.
+	defaultsWithComments := applyCustomComments(defaults, customComments)
+	promoteEmptyContainersToSections(defaultsWithComments, populatedSections)
+
 	merged := make([]service.FlatValueEntry, 0, len(defaults)+len(customOnly))
-	merged = append(merged, applyCustomComments(defaults, customComments)...)
+	merged = append(merged, defaultsWithComments...)
 
 	for _, e := range customOnly {
 		merged = append(merged, e)
@@ -613,6 +636,33 @@ func applyCustomComments(defaults []service.FlatValueEntry, customComments map[s
 	}
 
 	return out
+}
+
+// promoteEmptyContainersToSections rewrites Value to "" on entries whose
+// key is in the populated set AND whose current shape is the empty-
+// container placeholder ({} / []). The chart-side flattener emits "{}" /
+// "[]" for empty maps and lists; an overlay that populates the key emits
+// a true section header (Value=""). When the two disagree, the unified
+// row would otherwise inherit the chart's leaf shape — losing the
+// section-comment editor, the chevron, and the indent grouping for the
+// overlay's children. This pass aligns the row to the populated shape.
+//
+// Mutates entries in place — callers pass the cloned slice from
+// applyCustomComments, not defaults directly.
+func promoteEmptyContainersToSections(entries []service.FlatValueEntry, populated map[string]struct{}) {
+	if len(populated) == 0 {
+		return
+	}
+
+	for i := range entries {
+		if !entries[i].IsEmptyContainer() {
+			continue
+		}
+
+		if _, ok := populated[entries[i].Key]; ok {
+			entries[i].Value = ""
+		}
+	}
 }
 
 // stripCommentsFrom returns a clone of entries with every Comment field

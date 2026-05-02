@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 
+	"gioui.org/font"
 	"gioui.org/gesture"
 	"gioui.org/io/event"
 	"gioui.org/io/pointer"
@@ -118,8 +119,9 @@ type OverrideTable struct {
 	// ColumnRatio controls the left proportion (0..1). Defaults to overrideDefaultRatio.
 	ColumnRatio float32
 
-	// ShowComments controls whether comment lines above default value entries are displayed.
-	ShowComments bool
+	// ShowDocs controls whether the chart-default head-comment caption is
+	// rendered above each leaf row in the left (chart-default) panel.
+	ShowDocs bool
 
 	// SearchQuery is the current search text. When non-empty, key-column
 	// labels paint a yellow highlight behind the first case-insensitive match.
@@ -485,10 +487,39 @@ func (t *OverrideTable) layoutRow(
 		Top: overridePaddingV, Bottom: overridePaddingV,
 	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			// Chart-default head comment caption — the documentation block
+			// authored above this key in the chart's values.yaml. Read from
+			// DefaultComment (a separate field that survives the
+			// RebuildUnifiedEntries pass that rewrites Comment to the user's
+			// overlay-side annotation). Rendered only when "Show docs" is
+			// on; constrained to the left (chart-default) panel width
+			// and indented to the row's depth so it visually attaches to
+			// its key. Read-only italic muted text — distinct from the
+			// editable user-side comment editors below.
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if !t.ShowDocs || entry.DefaultComment == "" {
+					return layout.Dimensions{}
+				}
+
+				gtx.Constraints.Max.X = leftW
+				gtx.Constraints.Min.X = 0
+
+				return layout.Inset{
+					Left:  overridePaddingH + indent,
+					Right: overridePaddingH,
+				}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Body2(t.Theme, entry.DefaultComment)
+					lbl.Color = theme.Default.Muted
+					lbl.Font.Style = font.Italic
+					lbl.TextSize = theme.Default.SizeXL
+
+					return LayoutLabel(gtx, lbl)
+				})
+			}),
 			// Section comment editor, rendered in the RIGHT panel above the
 			// section row. Section rows have no value editor, so this is the
 			// place where the user's section-divider text surfaces and can be
-			// edited. Always shown (regardless of ShowComments) because it's
+			// edited. Always shown (regardless of ShowDocs) because it's
 			// structural documentation; the editor accepts an empty value to
 			// delete the comment on save.
 			//
@@ -567,19 +598,6 @@ func (t *OverrideTable) layoutRow(
 												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 													return LayoutHighlightedLabel(gtx, lbl, t.SearchQuery)
 												}),
-												// Extras "+" chip — ALWAYS visible (not hover-gated)
-												// because the user always needs to see that a row has
-												// no chart default. A typo in an extra key would
-												// silently render as a no-op row otherwise.
-												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-													if !entry.IsCustomOnly {
-														return layout.Dimensions{}
-													}
-
-													return layout.Inset{Left: overrideBadgeGap}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-														return LayoutExtraChip(gtx, t.Theme)
-													})
-												}),
 											)
 										})
 									}),
@@ -592,7 +610,7 @@ func (t *OverrideTable) layoutRow(
 
 										return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
 											layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-												if entry.IsCustomOnly && !section {
+												if entry.IsCustomOnly {
 													return layoutMissingDefault(gtx, t.Theme)
 												}
 

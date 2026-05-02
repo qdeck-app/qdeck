@@ -30,6 +30,13 @@ const (
 	typeUnknown = "unknown"
 	typeMap     = "map"
 	typeList    = "list"
+
+	// emptyMapValue / emptyListValue are the placeholder Values flattenValues
+	// emits for empty containers, distinguishing them from populated section
+	// headers (Value=""). IsEmptyContainer uses these to detect a chart `{}` /
+	// `[]` that an overlay may later populate.
+	emptyMapValue  = "{}"
+	emptyListValue = "[]"
 )
 
 type stackItem struct {
@@ -509,11 +516,12 @@ func newFlatValues(vf *domain.ValuesFile) *FlatValues {
 	entries := make([]FlatValueEntry, len(vf.Entries))
 	for i, e := range vf.Entries {
 		entries[i] = FlatValueEntry{
-			Key:     string(e.Key),
-			Value:   e.Value,
-			Type:    e.Type,
-			Depth:   e.Key.Depth(),
-			Comment: e.Comment,
+			Key:            string(e.Key),
+			Value:          e.Value,
+			Type:           e.Type,
+			Depth:          e.Key.Depth(),
+			Comment:        e.Comment,
+			DefaultComment: e.Comment,
 		}
 	}
 
@@ -633,11 +641,15 @@ func buildFlatKeyPositions(root *yaml.Node) map[string]int {
 }
 
 // SortByFilePositions reorders entries to match the source file's DFS layout.
-// Entries whose flat key has no recorded position (custom-only keys not in
-// the chart-defaults file, or keys merged in via `<<: *base`) sort to the
-// end, ordered alphabetically among themselves so the result stays
-// deterministic. Stable sort preserves relative order for ties — important
-// when the same position would otherwise produce a flap between frames.
+// When an entry's flat key has no recorded position — overlay-only keys, or
+// keys merged in via `<<: *base` that buildFlatKeyPositions never visited —
+// the lookup walks up the parent chain so the entry sorts adjacent to its
+// nearest positioned ancestor. Without that walk, an overlay-added child
+// would land in the alphabetic tail far from its section header. Entries
+// whose entire ancestor chain is unknown still fall back to "end of file"
+// and order alphabetically among themselves. Stable sort preserves relative
+// order for ties — important when the same position would otherwise produce
+// a flap between frames.
 //
 // Empty positions or empty entries are no-ops; the caller can pass nil
 // without checking.
@@ -649,16 +661,8 @@ func SortByFilePositions(entries []FlatValueEntry, positions map[string]int) {
 	end := len(positions)
 
 	slices.SortStableFunc(entries, func(a, b FlatValueEntry) int {
-		pa, hasA := positions[a.Key]
-		pb, hasB := positions[b.Key]
-
-		if !hasA {
-			pa = end
-		}
-
-		if !hasB {
-			pb = end
-		}
+		pa := effectivePosition(a.Key, positions, end)
+		pb := effectivePosition(b.Key, positions, end)
 
 		if pa != pb {
 			return pa - pb
@@ -666,6 +670,25 @@ func SortByFilePositions(entries []FlatValueEntry, positions map[string]int) {
 
 		return strings.Compare(a.Key, b.Key)
 	})
+}
+
+// effectivePosition returns key's recorded position, falling back to the
+// nearest positioned ancestor (parent, grandparent, …). Returns end when
+// neither key nor any ancestor has a position. Used by SortByFilePositions
+// so overlay-added descendants of a known section sort beside their parent
+// rather than getting flushed to the alphabetic tail.
+func effectivePosition(key string, positions map[string]int, end int) int {
+	if p, ok := positions[key]; ok {
+		return p
+	}
+
+	for parent := domain.FlatKey(key).Parent(); parent != ""; parent = parent.Parent() {
+		if p, ok := positions[string(parent)]; ok {
+			return p
+		}
+	}
+
+	return end
 }
 
 // flattenValues converts a nested map[string]any to a sorted flat list.
@@ -686,7 +709,7 @@ func flattenValues(source string, vals map[string]any) *domain.ValuesFile {
 		case map[string]any:
 			if len(typedVal) == 0 {
 				vf.Entries = append(vf.Entries, domain.ValuesEntry{
-					Key: domain.FlatKey(item.prefix), Value: "{}", Type: typeMap,
+					Key: domain.FlatKey(item.prefix), Value: emptyMapValue, Type: typeMap,
 				})
 
 				continue
@@ -715,7 +738,7 @@ func flattenValues(source string, vals map[string]any) *domain.ValuesFile {
 		case []any:
 			if len(typedVal) == 0 {
 				vf.Entries = append(vf.Entries, domain.ValuesEntry{
-					Key: domain.FlatKey(item.prefix), Value: "[]", Type: typeList,
+					Key: domain.FlatKey(item.prefix), Value: emptyListValue, Type: typeList,
 				})
 
 				continue
