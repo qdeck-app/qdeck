@@ -31,20 +31,6 @@ import (
 	"gioui.org/io/transfer"
 )
 
-// mouseStablePID is the PointerID we report for every Source=Mouse event.
-// Windows assigns different PointerIDs to a single physical mouse across
-// EnableMouseInPointer reassignments, and the WM_MOUSEWHEEL path historically
-// emitted scroll events with PointerID=0 while WM_POINTER* events used the
-// Windows-assigned ID — producing two entries in pointerQueue.state.pointers
-// for the same device. The phantom entry's gestures never receive Leave,
-// its hit-test runs every frame, and because state.cursor is threaded
-// through every pointer in pointerQueue.Frame the stale entry's cursor
-// resolution overwrites the live one. Normalising all Mouse events to a
-// single stable ID at this layer keeps state.pointers to a single Mouse
-// entry. Chosen as max-uint so it cannot collide with Windows-assigned
-// touch finger IDs (which start at small values).
-var mouseStablePID = ^pointer.ID(0)
-
 type Win32ViewEvent struct {
 	HWND uintptr
 }
@@ -520,6 +506,22 @@ func (w *window) hitTest(x, y int) uintptr {
 	}
 	return windows.HTCLIENT
 }
+
+// mouseStablePID is the PointerID reported for every Source=Mouse event so
+// pointerQueue only ever holds a single entry for the physical mouse.
+// Two paths in this file used to produce different IDs for the same mouse:
+// scrollEvent omitted PointerID and let it default to 0, while pointerUpdate
+// forwarded whatever ID Windows assigned via getPointerIDwParam (typically
+// 1+). pointerQueue keys state.pointers by PointerID, so the same physical
+// device produced two persistent entries; the scroll-derived one
+// accumulated entered tags it never released and its stale-position
+// hit-test overwrote the live pointer's cursor resolution every frame.
+// EnableMouseInPointer also reassigns the mouse's PointerID across focus /
+// window-leave events; normalising here absorbs that drift too. Touch
+// keeps Windows-assigned IDs because multi-touch needs distinct pointers.
+// The sentinel is max-uint so it cannot collide with Windows-assigned
+// touch finger IDs (which start at small values).
+var mouseStablePID = ^pointer.ID(0)
 
 func (w *window) pointerUpdate(pi windows.PointerInfo, pid pointer.ID, kind pointer.Kind, lParam uintptr) {
 	if !w.config.Focused {
