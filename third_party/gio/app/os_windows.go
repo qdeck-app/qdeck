@@ -31,6 +31,20 @@ import (
 	"gioui.org/io/transfer"
 )
 
+// mouseStablePID is the PointerID we report for every Source=Mouse event.
+// Windows assigns different PointerIDs to a single physical mouse across
+// EnableMouseInPointer reassignments, and the WM_MOUSEWHEEL path historically
+// emitted scroll events with PointerID=0 while WM_POINTER* events used the
+// Windows-assigned ID — producing two entries in pointerQueue.state.pointers
+// for the same device. The phantom entry's gestures never receive Leave,
+// its hit-test runs every frame, and because state.cursor is threaded
+// through every pointer in pointerQueue.Frame the stale entry's cursor
+// resolution overwrites the live one. Normalising all Mouse events to a
+// single stable ID at this layer keeps state.pointers to a single Mouse
+// entry. Chosen as max-uint so it cannot collide with Windows-assigned
+// touch finger IDs (which start at small values).
+var mouseStablePID = ^pointer.ID(0)
+
 type Win32ViewEvent struct {
 	HWND uintptr
 }
@@ -515,6 +529,7 @@ func (w *window) pointerUpdate(pi windows.PointerInfo, pid pointer.ID, kind poin
 	src := pointer.Touch
 	if pi.PointerType == windows.PT_MOUSE {
 		src = pointer.Mouse
+		pid = mouseStablePID
 	}
 
 	x, y := coordsFromlParam(lParam)
@@ -566,6 +581,7 @@ func (w *window) scrollEvent(wParam, lParam uintptr, horizontal bool, kmods key.
 	w.ProcessEvent(pointer.Event{
 		Kind:      pointer.Scroll,
 		Source:    pointer.Mouse,
+		PointerID: mouseStablePID,
 		Position:  p,
 		Buttons:   getPointerButtons(pi),
 		Scroll:    sp,

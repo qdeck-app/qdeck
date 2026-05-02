@@ -49,17 +49,29 @@ Workaround applied:
 
 - **Custom label/editor renderer** (`ui/widget/label.go`) with a 256-glyph buffer and integer pixel-grid snapping — all text must be rendered through `widget.LayoutLabel` / `widget.LayoutEditor`, never via Gio's `lbl.Layout(gtx)` directly
 
-### Vendored Gio (Windows click reliability)
+### Vendored Gio (Windows pointer reliability)
 
-`third_party/gio/` holds a local fork of `gioui.org v0.9.0`. `go.mod` replaces the upstream import with this fork. The patch we apply on top is in [`third_party/0001-gesture-refresh-PointerID-on-Press-and-Enter.patch`](third_party/0001-gesture-refresh-PointerID-on-Press-and-Enter.patch).
+`third_party/gio/` holds a local fork of `gioui.org v0.9.0`. `go.mod` replaces the upstream import with this fork. Two Windows-specific patches sit alongside it in `third_party/`:
 
-**Upstream submission:** [lists.sr.ht/~eliasnaur/gio-patches/patches/69089](https://lists.sr.ht/~eliasnaur/gio-patches/patches/69089). Drop the fork once this lands in a Gio release.
+#### 0001 — refresh PointerID on Press and Enter
+
+[`third_party/0001-gesture-refresh-PointerID-on-Press-and-Enter.patch`](third_party/0001-gesture-refresh-PointerID-on-Press-and-Enter.patch). Submitted upstream at [lists.sr.ht/~eliasnaur/gio-patches/patches/69089](https://lists.sr.ht/~eliasnaur/gio-patches/patches/69089).
 
 **Why:** upstream `gesture.Click` and `gesture.Hover` lock their internal `pid` field to the first `PointerID` they ever see — both refresh it only when `!c.hovered` / `!h.entered`. On Windows, Gio enables `EnableMouseInPointer(1)` (`app/os_windows.go`), which causes the OS to assign different `PointerID`s to the same physical mouse across focus changes, window leave/re-enter, and similar events. Once the gesture is "stuck" with a stale pid, every subsequent `Press` whose `PointerID` doesn't match is silently dropped (the `pid != e.PointerID` check breaks out before reaching `c.pressed = true` and the event return). Most visibly this made clicks no-op on multi-line override editors, where `widget.Editor`'s internal `clicker` (a `gesture.Click`) ate the press without positioning the caret.
 
 **Patch:** refresh `pid` on every `Enter` / `Press` so the gesture tracks whichever pointer is currently interacting. 14 lines added, 12 removed. No behavioural change on macOS/Linux.
 
-**Removing the fork:** when the upstream patch is merged and released, drop the `replace` directive in [`go.mod`](go.mod), bump `gioui.org` to the release, delete `third_party/gio/`, both `.patch` files, the drift-check step in CI, and this section.
+#### 0002 — stable PointerID for the mouse
+
+[`third_party/0002-app-windows-stable-PointerID-for-mouse.patch`](third_party/0002-app-windows-stable-PointerID-for-mouse.patch). Submitted upstream at [lists.sr.ht/~eliasnaur/gio-patches/patches/69233](https://lists.sr.ht/~eliasnaur/gio-patches/patches/69233).
+
+**Why:** the Windows backend reported two different `PointerID`s for the same physical mouse — `scrollEvent` omitted `PointerID` from its `pointer.Event` so it defaulted to 0, while `pointerUpdate` forwarded whatever ID Windows assigned (typically 1+). Gio's `pointerQueue` keys `state.pointers` by `PointerID`, so a single mouse produced two persistent entries. The phantom (the scroll-derived one) accumulated `entered` tags it never released — subsequent moves went to the other entry's id, so no `Leave` events ever cleared it — and ran hit-test every frame at the user's last scroll-wheel position. Because `state.cursor` is threaded through every pointer in `pointerQueue.Frame`'s loop, the phantom's hit-test overwrote the live pointer's cursor resolution every frame: hovering an anchor badge correctly resolved `CursorPointer`, then the phantom (sitting over an editor cell) overwrote it with `CursorText` for the same frame. Same mechanism produced the "two rows hovered at once" symptom — phantom pointer's `entered` tags never released. `EnableMouseInPointer` PID drift across focus events compounded the problem with additional phantom entries.
+
+**Patch:** normalise all `Source=Mouse` events to a single stable `PointerID` (`^pointer.ID(0)`) at the platform layer so `pointerQueue` always sees one entry per physical mouse. Touch keeps Windows-assigned IDs because multi-touch needs distinct pointers per finger. The chosen sentinel is max-uint so it cannot collide with Windows-assigned touch finger IDs.
+
+#### Removing the fork
+
+When the upstream patches are merged and released, drop the `replace` directive in [`go.mod`](go.mod), bump `gioui.org` to the release, delete `third_party/gio/`, both `.patch` files, the drift-check step in CI, and this section.
 
 ## License
 

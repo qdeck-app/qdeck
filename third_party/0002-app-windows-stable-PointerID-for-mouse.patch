@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Eugene <eugenebosyakov@gmail.com>
+Date: Sun, 03 May 2026 00:00:00 +0300
+Subject: [PATCH] app/windows: stable PointerID for the mouse
+
+The Windows backend reports two different PointerIDs for the same
+physical mouse: scrollEvent omitted PointerID from its pointer.Event
+so it defaulted to 0, while pointerUpdate forwarded whatever ID
+Windows assigned via getPointerIDwParam (typically 1+). pointerQueue
+keys state.pointers by PointerID, so a single mouse produced two
+persistent entries — one for scroll, one for move/press/release.
+
+The scroll-derived entry never received a Leave event (subsequent
+moves went to the other entry's id) so its entered set never
+emptied, the entry was never removed, and pointerQueue.Frame ran
+hit-test for it every frame at the user's last scroll-wheel
+position. Because state.cursor is threaded through every pointer
+in pointerQueue.Frame's loop, the stale entry's hit-test
+overwrote the live pointer's cursor resolution every frame:
+hovering an anchor badge correctly resolved CursorPointer for the
+live pointer, then the phantom (sitting over an unrelated editor
+cell) overwrote it with CursorText for the same frame. The user
+saw the wrong cursor and a hover that appeared "stuck" on multiple
+rows simultaneously — both symptoms are the phantom pointer
+carrying stale entered tags.
+
+EnableMouseInPointer also reassigns the mouse's PointerID across
+focus / window-leave events, which can compound the issue with
+additional phantom entries; this fix subsumes that drift too by
+keeping the ID Gio sees stable regardless of Windows-side renumbering.
+
+Normalise all Source=Mouse events to a single stable PointerID at
+the platform layer so pointerQueue sees one entry per physical
+mouse. Touch events keep their Windows-assigned IDs because
+multi-touch needs distinct pointers per finger. The stable ID is
+^pointer.ID(0) so it cannot collide with Windows-assigned touch
+finger IDs (which start at small values).
+
+Signed-off-by: Eugene <eugenebosyakov@gmail.com>
+---
+ app/os_windows.go | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/app/os_windows.go b/app/os_windows.go
+--- a/app/os_windows.go
++++ b/app/os_windows.go
+@@ -529,12 +529,19 @@ func (w *window) hitTest(x, y int) uintptr {
+ 	return windows.HTCLIENT
+ }
+
++// mouseStablePID is the PointerID we report for every Source=Mouse event.
++// Windows assigns different IDs to a single physical mouse between
++// WM_MOUSEWHEEL (which previously emitted PointerID=0) and WM_POINTER*
++// events (where the ID comes from getPointerIDwParam), and EnableMouseInPointer
++// reassigns the mouse's ID across focus changes. Both paths produce phantom
++// entries in pointerQueue.state.pointers whose stale hit-tests overwrite the
++// live pointer's cursor resolution. Normalising to a single stable ID keeps
++// state.pointers to one Mouse entry. Chosen as max-uint so it cannot collide
++// with Windows-assigned touch finger IDs (which start at small values).
++var mouseStablePID = ^pointer.ID(0)
++
+ func (w *window) pointerUpdate(pi windows.PointerInfo, pid pointer.ID, kind pointer.Kind, lParam uintptr) {
+ 	if !w.config.Focused {
+ 		windows.SetFocus(w.hwnd)
+ 	}
+
+ 	src := pointer.Touch
+ 	if pi.PointerType == windows.PT_MOUSE {
+ 		src = pointer.Mouse
++		pid = mouseStablePID
+ 	}
+
+ 	x, y := coordsFromlParam(lParam)
+@@ -585,6 +592,7 @@ func (w *window) scrollEvent(wParam, lParam uintptr, horizontal bool, kmods key.
+ 	w.ProcessEvent(pointer.Event{
+ 		Kind:      pointer.Scroll,
+ 		Source:    pointer.Mouse,
++		PointerID: mouseStablePID,
+ 		Position:  p,
+ 		Buttons:   getPointerButtons(pi),
+ 		Scroll:    sp,
+--
+2.50.1.windows.1
