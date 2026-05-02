@@ -144,12 +144,14 @@ func (t *OverrideTable) layoutBoolSwitchCell(
 }
 
 // layoutMissingDefault renders the negative-space placeholder for an
-// extra (override-only) leaf row's default cell. The italic ∅ glyph + text
-// is the strongest visual signal that the row has no chart default to
-// fall back to — a typo in the override key would silently render as an
-// extra row, so this surface is load-bearing.
+// extra (override-only) row's default cell. Fires for both leaf and
+// section rows — sections have no value editor on the left, so the
+// cell footprint is otherwise unused. The italic muted text is the
+// load-bearing visual signal that the row has no chart default to fall
+// back to — a typo in the override key would silently render as an
+// extra row otherwise.
 func layoutMissingDefault(gtx layout.Context, th *material.Theme) layout.Dimensions {
-	lbl := material.Label(th, theme.Default.SizeSM, "∅ not in chart")
+	lbl := material.Label(th, theme.Default.SizeSM, "not in chart")
 	lbl.Color = theme.Default.Muted2
 	lbl.Font.Style = font.Italic
 	lbl.MaxLines = 1

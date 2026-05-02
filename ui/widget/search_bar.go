@@ -60,7 +60,21 @@ func (s *SearchBar) rebuildCacheIfNeeded(entries []service.FlatValueEntry) {
 	s.cachedPtr = ptr
 	s.lowerKeys = buildSearchLowerCache(s.lowerKeys, n, func(i int) string { return entries[i].Key })
 	s.lowerValues = buildSearchLowerCache(s.lowerValues, n, func(i int) string { return entries[i].Value })
-	s.lowerComments = buildSearchLowerCache(s.lowerComments, n, func(i int) string { return entries[i].Comment })
+	// Indexes both user-side (Comment) and chart-default (DefaultComment)
+	// annotations so search hits documentation prose from either source.
+	// Joined with a newline — search queries are single-line input, so a
+	// query can't span the boundary the way a space-join would allow.
+	s.lowerComments = buildSearchLowerCache(s.lowerComments, n, func(i int) string {
+		if entries[i].DefaultComment == "" {
+			return entries[i].Comment
+		}
+
+		if entries[i].Comment == "" {
+			return entries[i].DefaultComment
+		}
+
+		return entries[i].Comment + "\n" + entries[i].DefaultComment
+	})
 }
 
 // FilterEntriesWithMultiOverrides returns indices matching key, value, comment,

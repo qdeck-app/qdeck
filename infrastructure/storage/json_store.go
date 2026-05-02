@@ -23,7 +23,7 @@ type AppData struct {
 	RecentCharts        []domain.RecentChart           `json:"recentCharts"`
 	RecentValues        []domain.RecentValuesFile      `json:"recentValues"`
 	RecentValuesEntries []domain.RecentValuesEntry     `json:"recentValuesEntries,omitempty"`
-	ShowComments        *bool                          `json:"showComments,omitempty"`
+	ShowDocs            *bool                          `json:"showDocs,omitempty"`
 	ChartUIStates       map[string]domain.ChartUIState `json:"chartUiStates,omitempty"`
 }
 

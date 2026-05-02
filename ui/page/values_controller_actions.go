@@ -493,10 +493,10 @@ func (vc *ValuesController) OnSaveChartVersion(chartName, version string) {
 	})
 }
 
-func (vc *ValuesController) onShowCommentsChanged(show bool) {
+func (vc *ValuesController) onShowDocsChanged(show bool) {
 	go func() {
-		if err := vc.RecentService.SaveShowComments(context.Background(), show); err != nil {
-			slog.Error("save show comments preference", "error", err)
+		if err := vc.RecentService.SaveShowDocs(context.Background(), show); err != nil {
+			slog.Error("save show docs preference", "error", err)
 		}
 	}()
 }

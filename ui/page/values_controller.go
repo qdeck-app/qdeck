@@ -208,7 +208,7 @@ func (vc *ValuesController) Callbacks() ValuesPageCallbacks {
 		OnRenderDefaults:        vc.onRenderDefaults,
 		OnRenderOverrides:       vc.onRenderOverrides,
 		OnKeyCopied:             vc.onKeyCopied,
-		OnShowCommentsChanged:   vc.onShowCommentsChanged,
+		OnShowDocsChanged:       vc.onShowDocsChanged,
 		OnCellFocusChanged:      vc.onCellFocusChanged,
 		OnCollapseChanged:       vc.onCollapseChanged,
 		OnAnchorCreate:          vc.onAnchorCreate,
