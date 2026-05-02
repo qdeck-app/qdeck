@@ -29,6 +29,15 @@ type FlatValues struct {
 	NodeTree  *yaml.Node            // parsed yaml.Node tree for comment-preserving serialization (nil for defaults)
 	Anchors   map[string]AnchorInfo // flat key -> anchor/alias annotation for rendering badges; nil when no anchors present
 
+	// Encoding and LineEnding describe the source file bytes (UTF-8 / UTF-8 BOM
+	// / UTF-16 LE/BE; LF / CRLF) and are preserved on save via
+	// EncodeForFile — opening, editing, and saving a UTF-8 BOM CRLF file
+	// won't silently rewrite it as plain UTF-8 LF. Empty when the values
+	// weren't backed by a real on-disk file. For multi-file merge they
+	// reflect the FIRST file — the same convention as Indent.
+	Encoding   string
+	LineEnding string
+
 	// DocHeadComment holds the file-level banner — yaml.v3's DocumentNode head
 	// comment, which sits before the first key in the source. Cleaned (no "# "
 	// prefix, multi-line lines joined by "\n", blank lines dropped).

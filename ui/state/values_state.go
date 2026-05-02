@@ -475,7 +475,7 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 	// Comment (defaults-side documentation noise is hidden by design — only the
 	// user's custom file contributes visible comments) and skip the customOnly
 	// merge since there's nothing to merge.
-	if !s.anyColumnHasCustomValues() {
+	if !s.AnyColumnHasCustomValues() {
 		stripped := stripCommentsFrom(defaults)
 		service.SortByFilePositions(stripped, s.DefaultValues.KeyPositions)
 		decorated := s.decorateWithCustomComments(stripped)
@@ -678,10 +678,10 @@ func stripCommentsFrom(entries []service.FlatValueEntry) []service.FlatValueEntr
 	return out
 }
 
-// anyColumnHasCustomValues reports whether any active column has loaded
+// AnyColumnHasCustomValues reports whether any active column has loaded
 // CustomValues. Used to short-circuit RebuildUnifiedEntries in the common case
 // where no custom file is loaded yet.
-func (s *ValuesPageState) anyColumnHasCustomValues() bool {
+func (s *ValuesPageState) AnyColumnHasCustomValues() bool {
 	for c := range s.ColumnCount {
 		if s.Columns[c].CustomValues != nil {
 			return true

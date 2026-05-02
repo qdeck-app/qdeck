@@ -221,18 +221,74 @@ func (p *ValuesPage) layoutStickyParent(gtx layout.Context) layout.Dimensions {
 }
 
 // layoutStickyDiagnostics is the right-aligned half of the sticky parent
-// strip — the override / extras / encoding triplet previously hosted in
-// the separate bottom status bar.
+// strip — override count, extras count, then one encoding/EOL label per
+// loaded column, separated by hairline dividers. Stays hidden until at
+// least one column has a parsed values file so the user isn't shown
+// stale chrome on an empty page.
 func (p *ValuesPage) layoutStickyDiagnostics(gtx layout.Context) layout.Dimensions {
+	if !p.State.AnyColumnHasCustomValues() {
+		return layout.Dimensions{}
+	}
+
 	overrideCount, extraCount := p.diagnosticCounts()
 
-	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-		layout.Rigid(p.layoutDiagnosticText(overrideCountLabel(overrideCount), theme.Default.Muted)),
-		layout.Rigid(layout.Spacer{Width: stickyDiagGap}.Layout),
-		layout.Rigid(p.layoutDiagnosticText(extraCountLabel(extraCount), theme.Default.Muted)),
-		layout.Rigid(layout.Spacer{Width: stickyDiagGap}.Layout),
-		layout.Rigid(p.layoutDiagnosticText("UTF-8 · LF · YAML", theme.Default.Muted2)),
-	)
+	// Pre-allocated to avoid per-frame heap traffic in the UI loop. Each
+	// chip can be preceded by a divider so the total bound is 2*chips - 1.
+	var children [2*stickyDiagMaxChips - 1]layout.FlexChild //nolint:mnd // chips + interleaved dividers, see stickyDiagMaxChips
+
+	n := 0
+	n = p.appendDiagChip(children[:], n, overrideCountLabel(overrideCount), theme.Default.Muted)
+	n = p.appendDiagChip(children[:], n, extraCountLabel(extraCount), theme.Default.Muted)
+
+	for c := range p.State.ColumnCount {
+		cv := p.State.Columns[c].CustomValues
+		if cv == nil {
+			continue
+		}
+
+		n = p.appendDiagChip(children[:], n, formatEncodingLabel(cv.Encoding, cv.LineEnding), theme.Default.Muted2)
+	}
+
+	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children[:n]...)
+}
+
+// appendDiagChip writes a chip into the diagnostics children slice,
+// preceded by a hairline divider when n > 0. Returns the new length.
+// Skips empty text. Plain method (no closure capture) so the diagnostics
+// row stays clear of per-frame heap allocation regardless of how Go's
+// escape analysis evolves.
+func (p *ValuesPage) appendDiagChip(children []layout.FlexChild, n int, text string, col color.NRGBA) int {
+	if text == "" {
+		return n
+	}
+
+	if n > 0 {
+		children[n] = layout.Rigid(p.layoutStickyDiagDivider)
+		n++
+	}
+
+	children[n] = layout.Rigid(p.layoutDiagnosticText(text, col))
+
+	return n + 1
+}
+
+// layoutStickyDiagDivider draws a hairline vertical separator centered in a
+// stickyDiagGap-wide slot. Used between adjacent diagnostic chips.
+func (p *ValuesPage) layoutStickyDiagDivider(gtx layout.Context) layout.Dimensions {
+	gap := gtx.Dp(stickyDiagGap)
+	h := gtx.Dp(stickyDiagDividerH)
+	w := gtx.Dp(stickyDiagDividerW)
+	x := (gap - w) / 2 //nolint:mnd // center the hairline in the slot
+
+	rect := clip.Rect{
+		Min: image.Pt(x, 0),
+		Max: image.Pt(x+w, h),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: theme.Default.Border}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	rect.Pop()
+
+	return layout.Dimensions{Size: image.Pt(gap, h)}
 }
 
 func (p *ValuesPage) layoutDiagnosticText(txt string, col color.NRGBA) layout.Widget {
@@ -287,10 +343,25 @@ func extraCountLabel(n int) string {
 	}
 
 	if n == 1 {
-		return "✚1 extra"
+		return "1 extra"
 	}
 
-	return "✚" + formatStickyCount(n) + " extras"
+	return formatStickyCount(n) + " extras"
+}
+
+// formatEncodingLabel joins an encoding label and a line-ending label with
+// the strip's middle-dot separator. Returns just the encoding when there's
+// no line ending (file with no newline), and "" when both are empty.
+func formatEncodingLabel(enc, eol string) string {
+	if enc == "" {
+		return ""
+	}
+
+	if eol == "" {
+		return enc
+	}
+
+	return enc + " · " + eol
 }
 
 // formatStickyCount stringifies a non-negative count. Hand-rolled to
