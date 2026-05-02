@@ -64,7 +64,15 @@ const (
 	// header area so scrolling never resizes the list.
 	stickyParentStripH    unit.Dp = 24
 	stickyParentStripPadV unit.Dp = 4
-	stickyDiagGap         unit.Dp = 14 // gap between override / extras / encoding chips
+	stickyDiagGap         unit.Dp = 14 // total slot width for the divider drawn between diagnostic chips
+	stickyDiagDividerH    unit.Dp = 12 // height of the hairline divider drawn inside that slot
+	stickyDiagDividerW    unit.Dp = 1  // hairline width
+
+	// stickyDiagMaxChips is the upper bound on chips the diagnostics row can
+	// render at once: 2 fixed (override count, extra count) plus one
+	// per-column encoding label. The pre-allocated FlexChild array is sized
+	// for these chips with a divider between every adjacent pair.
+	stickyDiagMaxChips = 2 + state.MaxCustomColumns
 
 	recentItemPadV   unit.Dp = 2
 	showDocsSize     unit.Dp = 18

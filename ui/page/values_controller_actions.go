@@ -270,7 +270,8 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 			}
 		}
 
-		vc.saveToFile(yamlText, path)
+		enc, eol := columnFileEncoding(col)
+		vc.saveToFile(yamlText, path, enc, eol)
 
 		return
 	}
@@ -300,14 +301,26 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 	})
 }
 
-func (vc *ValuesController) saveToFile(yamlText, path string) {
+func (vc *ValuesController) saveToFile(yamlText, path, encoding, lineEnding string) {
 	vc.ExportRunner.RunWithTimeout(config.FileExportOperation, func(ctx context.Context) (string, error) {
-		if err := vc.ValuesService.SaveValuesFile(ctx, yamlText, path); err != nil {
+		if err := vc.ValuesService.SaveValuesFile(ctx, yamlText, path, encoding, lineEnding); err != nil {
 			return "", fmt.Errorf("save values: %w", err)
 		}
 
 		return path, nil
 	})
+}
+
+// columnFileEncoding returns the source-file encoding/line-ending preserved on
+// the column's loaded CustomValues so SaveValuesFile can round-trip the
+// original BOM and CRLF shape. Returns ("", "") when the column has nothing
+// loaded (new file via dialog) — EncodeForFile then emits plain UTF-8 LF.
+func columnFileEncoding(col *state.CustomColumnState) (encoding, lineEnding string) {
+	if col == nil || col.CustomValues == nil {
+		return "", ""
+	}
+
+	return col.CustomValues.Encoding, col.CustomValues.LineEnding
 }
 
 // IsOverwriteDialogActive reports whether the overwrite confirmation dialog is visible.
@@ -335,7 +348,8 @@ func (vc *ValuesController) HandleOverwriteDialog(gtx layout.Context) {
 		if len(col.CustomFilePaths) > 0 {
 			vc.pendingSave = saveValues
 			vc.saveColumnIdx = vc.overwritePendingCol
-			vc.saveToFile(vc.overwritePendingYAML, col.CustomFilePaths[0])
+			enc, eol := columnFileEncoding(col)
+			vc.saveToFile(vc.overwritePendingYAML, col.CustomFilePaths[0], enc, eol)
 		}
 
 		vc.overwritePendingYAML = ""

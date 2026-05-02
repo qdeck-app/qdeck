@@ -192,6 +192,7 @@ func (s *ValuesService) ReadCustomValues(ctx context.Context, filePath string) (
 	rawData, readErr := os.ReadFile(filePath) //nolint:gosec // filePath already validated by ReadValuesFile above
 	if readErr == nil {
 		vf.Indent = DetectYAMLIndent(rawData)
+		vf.Encoding, vf.LineEnding = DetectFileEncoding(rawData)
 
 		// Silently ignore comment parse errors—if comments can't be extracted,
 		// values are still valid, just without associated documentation.
@@ -236,6 +237,12 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 		lastDocHead  string
 		lastDocFoot  string
 		lastFoots    map[string]string
+		// Default to UTF-8 LF so a brief read-failure on the primary file
+		// doesn't blank the encoding chip. The chip is informational; the
+		// actual round-trip uses whatever the file actually was on the next
+		// successful read.
+		firstEnc = EncodingUTF8
+		firstEOL = LineEndingLF
 	)
 
 	for i, path := range paths {
@@ -248,9 +255,12 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 
 		rawData, readErr := os.ReadFile(path) //nolint:gosec // path validated by ReadValuesFile
 		if readErr == nil {
-			// Detect indentation from the first file.
+			// Indent and encoding/line-ending come from the first file — the
+			// user's primary values.yaml. Later merged files might use
+			// different conventions but the column displays the primary one.
 			if i == 0 {
 				indent = DetectYAMLIndent(rawData)
+				firstEnc, firstEOL = DetectFileEncoding(rawData)
 			}
 
 			if comments, parseErr := parseComments(rawData); parseErr == nil {
@@ -287,6 +297,8 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 	vf.DocHeadComment = lastDocHead
 	vf.DocFootComment = lastDocFoot
 	vf.FootComments = lastFoots
+	vf.Encoding = firstEnc
+	vf.LineEnding = firstEOL
 
 	attachComments(vf, mergedComments)
 
@@ -350,13 +362,22 @@ func (s *ValuesService) BuildOverrideMap(keys []string, values []string) (map[st
 	return result, nil
 }
 
-// SaveValuesFile writes YAML text to the given file path.
-func (s *ValuesService) SaveValuesFile(ctx context.Context, yamlText, destPath string) error {
+// SaveValuesFile writes YAML text to the given file path. The encoding and
+// lineEnding parameters preserve the source file's BOM and line-ending
+// shape — the same labels DetectFileEncoding produced when the file was
+// loaded — so that opening, editing, and saving a UTF-8-BOM CRLF file
+// doesn't silently rewrite it as plain UTF-8 LF. Pass empty strings for
+// new files (no source to preserve) and the writer emits plain UTF-8 LF.
+func (s *ValuesService) SaveValuesFile(
+	ctx context.Context, yamlText, destPath, encoding, lineEnding string,
+) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("save values file: %w", ctx.Err())
 	}
 
-	if err := os.WriteFile(destPath, []byte(yamlText), saveFilePerm); err != nil {
+	data := EncodeForFile(yamlText, encoding, lineEnding)
+
+	if err := os.WriteFile(destPath, data, saveFilePerm); err != nil {
 		return fmt.Errorf("save values file to %s: %w", destPath, err)
 	}
 
@@ -541,6 +562,8 @@ func newFlatValues(vf *domain.ValuesFile) *FlatValues {
 		DocFootComment: vf.DocFootComment,
 		FootComments:   vf.FootComments,
 		KeyPositions:   buildFlatKeyPositions(vf.NodeTree),
+		Encoding:       vf.Encoding,
+		LineEnding:     vf.LineEnding,
 	}
 }
 
