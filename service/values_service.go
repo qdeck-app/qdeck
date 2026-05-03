@@ -212,7 +212,38 @@ func (s *ValuesService) ReadCustomValues(ctx context.Context, filePath string) (
 		}
 	}
 
+	rewriteValuesFromNodeTree(vf)
+
 	return vf, nil
+}
+
+// rewriteValuesFromNodeTree replaces each entry's Value with the literal
+// scalar text from vf.NodeTree, when one is reachable. chartutil.ReadValuesFile
+// routes through sigs.k8s.io/yaml, which decodes integers larger than 2^53
+// to float64 and silently loses precision (e.g. `9007199254740993` becomes
+// `9.007199254740992e+15`). yaml.v3's parser keeps the literal text on each
+// scalar node verbatim, so once we've parsed the file into NodeTree we can
+// use it as the source of truth for scalar leaves. Aliases and merge keys
+// resolve through the same code path PatchNodeTree uses, so the rewritten
+// Value matches what a YAML consumer (Helm, kubectl) would see at that key.
+//
+// No-op when NodeTree is unavailable (e.g. ReadValuesFile succeeded but the
+// raw-bytes re-parse failed).
+func rewriteValuesFromNodeTree(vf *domain.ValuesFile) {
+	if vf == nil || vf.NodeTree == nil {
+		return
+	}
+
+	for i := range vf.Entries {
+		e := &vf.Entries[i]
+		if e.Type == typeMap || e.Type == typeList {
+			continue
+		}
+
+		if literal, ok := EffectiveScalarAt(vf.NodeTree, string(e.Key)); ok {
+			e.Value = literal
+		}
+	}
 }
 
 // ReadAndMergeCustomValues loads multiple values files and deep-merges them.
@@ -301,6 +332,7 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 	vf.LineEnding = firstEOL
 
 	attachComments(vf, mergedComments)
+	rewriteValuesFromNodeTree(vf)
 
 	return vf, nil
 }
@@ -607,7 +639,7 @@ func buildFlatKeyPositions(root *yaml.Node) map[string]int {
 				k := node.Content[i]
 				v := node.Content[i+1]
 
-				if k == nil || v == nil || k.Value == "" {
+				if k == nil || v == nil {
 					continue
 				}
 
@@ -780,9 +812,19 @@ func flattenValues(source string, vals map[string]any) *domain.ValuesFile {
 			}
 
 		default:
+			value := fmt.Sprintf("%v", typedVal)
+			// fmt.Sprintf renders nil as "<nil>" — convertValue would then
+			// pass that literal string through to the YAML encoder, replacing
+			// the original `null` / `~` with the four-character "<nil>".
+			// Empty-string Value with Type=null round-trips through
+			// convertValue's typeNull case back to a real nil.
+			if typedVal == nil {
+				value = ""
+			}
+
 			vf.Entries = append(vf.Entries, domain.ValuesEntry{
 				Key:   domain.FlatKey(item.prefix),
-				Value: fmt.Sprintf("%v", typedVal),
+				Value: value,
 				Type:  inferType(typedVal),
 			})
 		}
@@ -795,12 +837,40 @@ func flattenValues(source string, vals map[string]any) *domain.ValuesFile {
 	return vf
 }
 
+// buildKey appends segment to prefix, applying flat-key escaping so that map
+// keys containing '.', '[', '\', or empty strings round-trip safely. prefix
+// is already encoded (it was returned by an earlier buildKey call); only
+// segment needs escaping at construction time.
+//
+// Use joinFlatKey instead when both arguments are already encoded paths —
+// passing an encoded path through buildKey's segment slot would
+// double-escape its embedded backslashes.
 func buildKey(prefix, segment string) string {
+	encoded := domain.EscapeSegment(segment)
 	if prefix == "" {
-		return segment
+		return encoded
 	}
 
-	return prefix + "." + segment
+	return prefix + "." + encoded
+}
+
+// joinFlatKey concatenates two already-encoded flat-key paths with the '.'
+// separator. Neither argument is re-escaped — both must be in the FlatKey
+// escape form already (e.g. produced by an earlier flatten call or
+// buildKey). Used when prefixing a subchart's per-leaf keys with the
+// subchart name, where both halves are encoded paths and re-running
+// EscapeSegment on either would double-escape any backslashes.
+//
+// Empty prefix returns the suffix verbatim (root-level join). Empty suffix
+// is preserved as a trailing '.' — that's how the FlatKey encoding
+// represents an empty-string child key, so dropping it here would collapse
+// the leaf out of existence.
+func joinFlatKey(prefixEncoded, suffixEncoded string) string {
+	if prefixEncoded == "" {
+		return suffixEncoded
+	}
+
+	return prefixEncoded + "." + suffixEncoded
 }
 
 func inferType(v any) string {
@@ -905,7 +975,7 @@ func collectDependencyValues(ch *chart.Chart, parentPrefix string) []domain.Valu
 
 		for _, e := range subVF.Entries {
 			all = append(all, domain.ValuesEntry{
-				Key:     domain.FlatKey(buildKey(fullPrefix, string(e.Key))),
+				Key:     domain.FlatKey(joinFlatKey(fullPrefix, string(e.Key))),
 				Value:   e.Value,
 				Type:    e.Type,
 				Comment: e.Comment,

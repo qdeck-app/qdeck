@@ -17,6 +17,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/qdeck-app/qdeck/domain"
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/state"
 	"github.com/qdeck-app/qdeck/ui/theme"
@@ -215,7 +216,7 @@ func appendAnchorMemberships(
 
 			out = append(out, anchorMembership{
 				name:   info.Name,
-				depth:  strings.Count(k, "."),
+				depth:  domain.FlatKey(k).Depth() - 1,
 				source: source,
 			})
 		}

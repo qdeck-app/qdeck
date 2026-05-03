@@ -634,7 +634,14 @@ func (vc *ValuesController) populateColumnOverrides(colIdx int) {
 	commentMap := make(map[string]string, len(col.CustomValues.Entries))
 
 	for _, e := range col.CustomValues.Entries {
-		if e.Value != "" {
+		// Include scalar-leaf entries unconditionally — even when Value is
+		// the empty string. Skipping empty values used to fall through to
+		// SerializeNodeSubtree, which YAML-encodes the scalar (`""` for an
+		// empty string) and writes that quoted form into the editor; on
+		// save, those literal quotes round-tripped as the four-character
+		// string `""` and yaml.v3 emitted them as `"\"\""`. Section and
+		// comment rows still skip — they're not editable scalar cells.
+		if !e.IsSection() && !e.IsComment() {
 			customMap[e.Key] = e.Value
 		}
 

@@ -259,11 +259,34 @@ func PatchNodeTree(root *yaml.Node, entries []OverrideEntry, indent int, docs Do
 			continue
 		}
 
-		effective, hasValue := findEffectiveScalar(workingTree, segments)
-		valueUnchanged := hasValue && effective == e.Value
+		// flattenValues emits "{}"/"[]" placeholder entries for empty
+		// containers so the UI has a row to render. The deep-copied tree
+		// already carries the correct (possibly populated) container at
+		// that path; treating the placeholder as a scalar edit would
+		// overwrite the container with a literal "{}"/"[]" string. Skip
+		// when the tree already has a matching container kind.
+		if e.Type == typeMap || e.Type == typeList {
+			if treeNodeMatchesContainerType(workingTree, segments, e.Type) {
+				continue
+			}
+		}
 
-		effHead, effLine := effectiveComments(workingTree, segments)
+		effective, hasValue := findEffectiveScalar(workingTree, segments)
+		valueUnchanged := hasValue && scalarsEquivalent(effective, e.Value, e.Type)
+
+		effHead, effLine, viaAlias := effectiveComments(workingTree, segments)
 		commentsUnchanged := overrideCommentsMatch(e.HeadComment, e.LineComment, effHead, effLine)
+
+		// When the leaf is reached through an alias, the comments yaml.v3
+		// reports at this position actually live on the anchor target.
+		// Writing comments here breaks the alias for no good reason — the
+		// user can only edit comments at the anchor source (where they're
+		// physically authored). Treat alias-resolved comments as
+		// effectively unchanged so an empty entry.HeadComment/LineComment
+		// doesn't trigger a clear that would expand the alias.
+		if viaAlias {
+			commentsUnchanged = true
+		}
 
 		if valueUnchanged && commentsUnchanged {
 			continue
@@ -285,6 +308,24 @@ func PatchNodeTree(root *yaml.Node, entries []OverrideEntry, indent int, docs Do
 	}
 
 	return encodeWithDocComments(workingTree, indent, docs.Head, docs.Foot)
+}
+
+// scalarsEquivalent reports whether the tree's effective scalar text and the
+// override entry's value mean the same thing for round-trip purposes. For
+// typeNull the three YAML representations (`null`, `~`, blank `""`) all encode
+// the same value, so treating them as equal here keeps PatchNodeTree's unedited
+// branch from rewriting (and re-styling) a null leaf the user didn't touch.
+// All other types fall back to literal string equality.
+func scalarsEquivalent(treeValue, entryValue, entryType string) bool {
+	if entryType == typeNull && isYAMLNullLiteral(treeValue) && isYAMLNullLiteral(entryValue) {
+		return true
+	}
+
+	return treeValue == entryValue
+}
+
+func isYAMLNullLiteral(s string) bool {
+	return s == "" || s == "~" || s == typeNull
 }
 
 // applyDocFoots writes each (leafKey -> footText) pair as the FootComment of
@@ -328,6 +369,185 @@ func applyTextByKey(
 	}
 
 	return nil
+}
+
+// Hex parsing parameters for parseHexEscape — named so the bit-shift and
+// digit-offset arithmetic don't trip mnd; the values themselves are
+// intrinsic to base-16 number representation.
+const (
+	hexNibbleBits  = 4
+	hexDigitOffset = 10 // value of 'a' in base-16 (and 'A')
+	yamlEscPrefix  = 2  // bytes consumed by `\U` / `\u` before the digits
+	yamlEscWide    = 8  // hex digits in a `\U` 32-bit escape
+	yamlEscNarrow  = 4  // hex digits in a `\u` 16-bit escape
+)
+
+// unescapeYAMLSupplementaryRunes rewrites yaml.v3's `\Unnnnnnnn` /
+// `\unnnn` escape sequences back to their literal Unicode characters
+// inside double-quoted scalars. yaml.v3's emitter classifies any code point
+// above the Basic Multilingual Plane (> U+FFFF — emojis, skin-tone
+// modifiers, lots of CJK Extension blocks) as "unprintable" and forces
+// double-quoted style with `\U` escapes regardless of the requested Style.
+// Without this pass, every save would silently rewrite an emoji like 🎉
+// (U+1F389) to the literal seven-character text `\U0001F389`.
+//
+// State machine walks the rendered text tracking double-quoted-string
+// boundaries; escapes are only converted while we're inside a `"..."`
+// scalar so a `\U…` sequence appearing in a comment, single-quoted scalar,
+// or block scalar passes through untouched. `\\U…` (backslash-escaped
+// backslash before `U`) is left alone — that's a literal `\U` in the
+// user's value.
+func unescapeYAMLSupplementaryRunes(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+
+	var b strings.Builder
+
+	b.Grow(len(s))
+
+	const (
+		stateText        = iota // outside any scalar
+		stateDouble             // inside a "..." scalar
+		stateSingle             // inside a '...' scalar
+		stateLineComment        // after an unquoted '#' to end of line
+	)
+
+	state := stateText
+
+	for i := 0; i < len(s); {
+		c := s[i]
+
+		switch state {
+		case stateText:
+			switch c {
+			case '"':
+				state = stateDouble
+
+				b.WriteByte(c)
+
+				i++
+			case '\'':
+				state = stateSingle
+
+				b.WriteByte(c)
+
+				i++
+			case '#':
+				state = stateLineComment
+
+				b.WriteByte(c)
+
+				i++
+			default:
+				b.WriteByte(c)
+
+				i++
+			}
+
+		case stateLineComment:
+			b.WriteByte(c)
+
+			if c == '\n' {
+				state = stateText
+			}
+
+			i++
+
+		case stateSingle:
+			b.WriteByte(c)
+
+			i++
+
+			if c == '\'' {
+				state = stateText
+			}
+
+		case stateDouble:
+			if c != '\\' {
+				b.WriteByte(c)
+
+				if c == '"' {
+					state = stateText
+				}
+
+				i++
+
+				continue
+			}
+
+			// Escape sequence inside double-quoted scalar.
+			if i+1 >= len(s) {
+				b.WriteByte(c)
+
+				i++
+
+				continue
+			}
+
+			next := s[i+1]
+			switch next {
+			case 'U':
+				if r, ok := parseHexEscape(s, i+yamlEscPrefix, yamlEscWide); ok {
+					b.WriteRune(r)
+
+					i += yamlEscPrefix + yamlEscWide
+
+					continue
+				}
+			case 'u':
+				if r, ok := parseHexEscape(s, i+yamlEscPrefix, yamlEscNarrow); ok {
+					b.WriteRune(r)
+
+					i += yamlEscPrefix + yamlEscNarrow
+
+					continue
+				}
+			}
+
+			// Any other escape (including `\\`, `\"`, `\n`, etc.) passes
+			// through verbatim — yaml.v3 will re-parse them on next load.
+			b.WriteByte(c)
+			b.WriteByte(next)
+
+			i += 2
+		}
+	}
+
+	return b.String()
+}
+
+// parseHexEscape parses width hex digits at s[off:] and returns the rune
+// they encode plus a true ok flag. Returns (0, false) when the slice is
+// short or any character isn't a hex digit, leaving the caller to emit the
+// escape sequence verbatim.
+func parseHexEscape(s string, off, width int) (rune, bool) {
+	if off+width > len(s) {
+		return 0, false
+	}
+
+	var r rune
+
+	for i := range width {
+		c := s[off+i]
+
+		var d rune
+
+		switch {
+		case c >= '0' && c <= '9':
+			d = rune(c - '0')
+		case c >= 'a' && c <= 'f':
+			d = rune(c-'a') + hexDigitOffset
+		case c >= 'A' && c <= 'F':
+			d = rune(c-'A') + hexDigitOffset
+		default:
+			return 0, false
+		}
+
+		r = r<<hexNibbleBits | d
+	}
+
+	return r, true
 }
 
 // applySectionHead sets HeadComment on the key node identified by segments,
@@ -378,7 +598,7 @@ func encodeWithDocComments(root *yaml.Node, indent int, docHead, docFoot string)
 		return "", fmt.Errorf("close YAML encoder: %w", err)
 	}
 
-	return buf.String(), nil
+	return unescapeYAMLSupplementaryRunes(buf.String()), nil
 }
 
 // EffectiveScalarAt walks tree to flatKey resolving aliases and merge keys,
@@ -442,15 +662,24 @@ func findEffectiveScalar(root *yaml.Node, segments []keySegment) (string, bool) 
 }
 
 // effectiveComments returns the cleaned (head, line) comment pair associated
-// with the leaf at segments. head is the best head comment from key-then-val,
-// line is the best line comment from val-then-key. Callers use these together
-// to decide whether an OverrideEntry's explicit HeadComment/LineComment truly
-// differ from what the file already encodes — unchanged comments are skipped
-// so the original inline vs. head-block style survives an unrelated save.
-func effectiveComments(root *yaml.Node, segments []keySegment) (string, string) {
-	parent, slot, err := findParentSlot(root, segments)
+// with the leaf at segments, plus a viaAlias flag signalling that the path
+// traverses an alias. head is the best head comment from key-then-val, line
+// is the best line comment from val-then-key. Callers use these together to
+// decide whether an OverrideEntry's explicit HeadComment/LineComment truly
+// differ from what the file already encodes — unchanged comments are
+// skipped so the original inline vs. head-block style survives an
+// unrelated save. The viaAlias flag lets the caller treat alias-resolved
+// comments as "comments live at the anchor source, not here", suppressing
+// a same-position comment write that would needlessly break the alias.
+//
+// Walks the tree read-only: alias nodes encountered along the path are
+// resolved through but never broken. The mutation paths
+// (applyOverrideComments, applyFootComment) still use findParentSlot,
+// which deliberately breaks aliases before writing.
+func effectiveComments(root *yaml.Node, segments []keySegment) (head, line string, viaAlias bool) {
+	parent, slot, viaAlias, err := findParentSlotReadOnly(root, segments)
 	if err != nil {
-		return "", ""
+		return "", "", false
 	}
 
 	switch parent.Kind {
@@ -458,16 +687,15 @@ func effectiveComments(root *yaml.Node, segments []keySegment) (string, string) 
 		keyNode := parent.Content[slot-1]
 		valNode := parent.Content[slot]
 
-		head := bestHeadComment(keyNode.HeadComment, valNode.HeadComment)
-		line := bestLineComment(valNode.LineComment, keyNode.LineComment)
-
-		return head, line
+		return bestHeadComment(keyNode.HeadComment, valNode.HeadComment),
+			bestLineComment(valNode.LineComment, keyNode.LineComment),
+			viaAlias
 	case yaml.SequenceNode:
 		child := parent.Content[slot]
 
-		return bestHeadComment(child.HeadComment), bestLineComment(child.LineComment)
+		return bestHeadComment(child.HeadComment), bestLineComment(child.LineComment), viaAlias
 	default:
-		return "", ""
+		return "", "", viaAlias
 	}
 }
 
