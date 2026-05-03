@@ -476,7 +476,7 @@ func (p *ValuesPage) resolveFocusedCell() (int, string, bool) {
 // Falls back to "anchor" when the sanitized result is empty and prefixes
 // "_" when the first char would be a digit.
 func suggestAnchorName(flatKey string) string {
-	parts := strings.Split(flatKey, ".")
+	parts := domain.FlatKey(flatKey).MapSegments()
 
 	tail := parts
 	if len(parts) > 2 { //nolint:mnd // last-two segments, not a tunable.

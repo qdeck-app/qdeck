@@ -129,8 +129,9 @@ func (t *OverrideTable) commitOverrideUpdate(
 	indent := service.DefaultYAMLIndent
 
 	var (
-		tree *yaml.Node
-		docs service.DocComments
+		tree         *yaml.Node
+		docs         service.DocComments
+		loadedValues map[string]string
 	)
 
 	if cs := t.ColumnStates[c]; cs != nil {
@@ -138,10 +139,11 @@ func (t *OverrideTable) commitOverrideUpdate(
 		if cs.CustomValues != nil {
 			tree = cs.CustomValues.NodeTree
 			docs = cs.DocCommentsForSave()
+			loadedValues = state.LoadedValuesMap(cs.CustomValues)
 		}
 	}
 
-	yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree, docs)
+	yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree, docs, loadedValues)
 	t.OnChanged(c, yamlText, yamlErr)
 }
 

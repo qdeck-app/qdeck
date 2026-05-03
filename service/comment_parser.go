@@ -96,7 +96,7 @@ func walkFootComments(item commentStackItem, stack *[]commentStackItem, foots ma
 	case yaml.MappingNode:
 		for i := 0; i < len(content)-1; i += 2 {
 			keyNode, valNode := content[i], content[i+1]
-			if keyNode == nil || valNode == nil || keyNode.Value == "" {
+			if keyNode == nil || valNode == nil {
 				continue
 			}
 
@@ -199,7 +199,7 @@ func walkCommentChildren(item commentStackItem, stack *[]commentStackItem, comme
 	case yaml.MappingNode:
 		for i := 0; i < len(content)-1; i += 2 {
 			keyNode, valNode := content[i], content[i+1]
-			if keyNode == nil || valNode == nil || keyNode.Value == "" {
+			if keyNode == nil || valNode == nil {
 				continue
 			}
 

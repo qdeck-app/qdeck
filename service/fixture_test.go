@@ -14,7 +14,7 @@ func TestLoadCustomFixture_BannerSurvives(t *testing.T) {
 
 	svc := NewValuesService()
 
-	domainVF, err := svc.ReadCustomValues(context.Background(), "../test-data/redis-values-cornercases.yaml")
+	domainVF, err := svc.ReadCustomValues(context.Background(), fixturePath)
 	if err != nil {
 		t.Skipf("fixture not present or unreadable: %v", err)
 	}

@@ -239,16 +239,20 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 	col := &vc.State.Columns[colIdx]
 
 	var (
-		tree *yaml.Node
-		docs service.DocComments
+		tree         *yaml.Node
+		docs         service.DocComments
+		loadedValues map[string]string
 	)
 
 	if col.CustomValues != nil {
 		tree = col.CustomValues.NodeTree
 		docs = col.DocCommentsForSave()
+		loadedValues = state.LoadedValuesMap(col.CustomValues)
 	}
 
-	yamlText, err := state.OverridesToYAML(vc.State.Entries, col.OverrideEditors, col.YAMLIndent(), tree, docs)
+	yamlText, err := state.OverridesToYAML(
+		vc.State.Entries, col.OverrideEditors, col.YAMLIndent(), tree, docs, loadedValues,
+	)
 	if err != nil {
 		vc.NotifState.Show(err.Error(), state.NotificationError, time.Now())
 

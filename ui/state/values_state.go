@@ -63,6 +63,15 @@ func (c *CustomColumnState) DocCommentsForSave() service.DocComments {
 
 const helmInstallPrefix = "helm install"
 
+// emptyMapValue / emptyListValue mirror the canonical placeholder Values
+// flattenValues emits for empty mapping / sequence leaves. Duplicated here
+// so the unified-entry merge can detect the leaf-shaped empty-container
+// rows without exposing the service package's full value-type taxonomy.
+const (
+	emptyMapValue  = "{}"
+	emptyListValue = "[]"
+)
+
 // CustomColumnState holds per-column widget state for an editable override column.
 type CustomColumnState struct {
 	// Values data
@@ -551,8 +560,21 @@ func (s *ValuesPageState) RebuildUnifiedEntries() (prev []service.FlatValueEntry
 				continue
 			}
 
+			// Carry the original Value through for empty-container leaves
+			// (Value="{}" / "[]"). Without this, IsSection() on the unified
+			// row would classify them as section headers (Value=="" with
+			// typeMap/typeList), collectOverrides would filter them out, and
+			// PatchNodeTree's deletion phase would drop the empty-container
+			// leaf from the saved file. Populated sections still arrive with
+			// Value="" from flattenValues, so they keep IsSection() == true.
+			value := ""
+			if e.Value == emptyMapValue || e.Value == emptyListValue {
+				value = e.Value
+			}
+
 			customOnly[e.Key] = service.FlatValueEntry{
 				Key:          e.Key,
+				Value:        value,
 				Type:         e.Type,
 				Depth:        e.Depth,
 				Comment:      e.Comment,

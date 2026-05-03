@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/qdeck-app/qdeck/domain"
 )
 
 const (
@@ -35,33 +37,46 @@ type keySegment struct {
 	isIndex bool
 }
 
-// parseKeySegments splits a flat key like "service.ports[0].name" into typed segments.
+// parseKeySegments splits a flat key like "service.ports[0].name" into typed
+// segments. Honours the FlatKey escape scheme (see domain package doc): \. is
+// a literal '.' inside a map-key segment, \[ a literal '[', \\ a literal '\'.
+// Empty map-key segments are allowed — they correspond to a YAML map with an
+// empty-string key.
 func parseKeySegments(key string) ([]keySegment, error) {
 	if key == "" {
 		return nil, nil
 	}
 
-	parts := strings.Split(key, ".")
+	parts := domain.SplitEncoded(key)
 	segments := make([]keySegment, 0, len(parts))
 
 	for _, part := range parts {
-		if part == "" {
-			return nil, fmt.Errorf("empty segment in key %q", key)
-		}
-
-		bracketIdx := strings.IndexByte(part, '[')
+		bracketIdx := domain.IndexUnescaped(part, '[')
 		if bracketIdx < 0 {
-			segments = append(segments, keySegment{name: part})
+			name, err := domain.UnescapeSegment(part)
+			if err != nil {
+				return nil, fmt.Errorf("decode segment %q: %w", part, err)
+			}
+
+			segments = append(segments, keySegment{name: name})
 
 			continue
 		}
 
-		// Part before the first bracket is a map key (if non-empty).
+		// Part before the first unescaped bracket is a map key. May be empty
+		// when the part is bare indices like "[0]" (e.g. when an array sits
+		// directly under a parent — bracket-only segments arise from the
+		// flatten path's "prefix + [i]" construction).
 		if bracketIdx > 0 {
-			segments = append(segments, keySegment{name: part[:bracketIdx]})
+			name, err := domain.UnescapeSegment(part[:bracketIdx])
+			if err != nil {
+				return nil, fmt.Errorf("decode segment %q: %w", part, err)
+			}
+
+			segments = append(segments, keySegment{name: name})
 		}
 
-		// Extract all [N] indices from this part.
+		// Index groups are pure numeric; no escape handling needed.
 		rest := part[bracketIdx:]
 		for len(rest) > 0 {
 			if rest[0] != '[' {
@@ -94,62 +109,87 @@ func parseKeySegments(key string) ([]keySegment, error) {
 	return segments, nil
 }
 
-// parseArraySegment splits "key[0]" into ("key", 0, true) or "[0]" into ("", 0, true).
-// For plain keys like "host" it returns ("host", 0, false).
-func parseArraySegment(seg string) (string, int, bool) {
-	bracketIdx := strings.IndexByte(seg, '[')
-	if bracketIdx < 0 {
-		return seg, 0, false
-	}
-
-	closeIdx := strings.IndexByte(seg[bracketIdx:], ']')
-	if closeIdx < 0 {
-		return seg, 0, false
-	}
-
-	idxStr := seg[bracketIdx+1 : bracketIdx+closeIdx]
-
-	idx, err := strconv.Atoi(idxStr)
-	if err != nil {
-		return seg, 0, false
-	}
-
-	return seg[:bracketIdx], idx, true
-}
-
 // findNodeSubtree supports array index segments like "servers[0].host" by
-// navigating into SequenceNode children.
+// navigating into SequenceNode children. Honours flat-key escapes — a key
+// segment like "app\.kubernetes\.io/x" is treated as a single map key with a
+// literal '.' rather than three nested segments.
 func findNodeSubtree(root *yaml.Node, keyPath string) *yaml.Node {
-	segments := strings.Split(keyPath, ".")
+	segs, err := parseKeySegments(keyPath)
+	if err != nil {
+		return nil
+	}
+
 	current := root
 
-	for _, seg := range segments {
-		// Handle array index segments like "items[0]" or bare "[0]".
-		mapKey, idx, hasIndex := parseArraySegment(seg)
-
-		if mapKey != "" {
-			current = findMappingChild(current, mapKey)
-			if current == nil {
+	for _, seg := range segs {
+		if seg.isIndex {
+			if current.Kind != yaml.SequenceNode || seg.index < 0 || seg.index >= len(current.Content) {
 				return nil
 			}
+
+			current = current.Content[seg.index]
+
+			continue
 		}
 
-		if hasIndex {
-			if current.Kind != yaml.SequenceNode || idx < 0 || idx >= len(current.Content) {
-				return nil
-			}
-
-			current = current.Content[idx]
-		} else if mapKey == "" {
-			// Plain key segment — navigate into mapping.
-			current = findMappingChild(current, seg)
-			if current == nil {
-				return nil
-			}
+		current = findMappingChild(current, seg.name)
+		if current == nil {
+			return nil
 		}
 	}
 
 	return current
+}
+
+// treeNodeMatchesContainerType reports whether the tree node at segments is
+// a MappingNode (matching typeMap) or SequenceNode (matching typeList).
+// Walks read-only — alias nodes are resolved but never broken — so callers
+// can probe the tree's shape without mutating shared anchor targets. Used
+// by PatchNodeTree to skip the "{}"/"[]" placeholder entries flattenValues
+// emits for empty containers, which would otherwise overwrite the existing
+// container with a literal string scalar on save.
+func treeNodeMatchesContainerType(root *yaml.Node, segments []keySegment, typ string) bool {
+	current := resolveAlias(root)
+
+	for _, seg := range segments {
+		if current == nil {
+			return false
+		}
+
+		if seg.isIndex {
+			if current.Kind != yaml.SequenceNode || seg.index < 0 || seg.index >= len(current.Content) {
+				return false
+			}
+
+			current = resolveAlias(current.Content[seg.index])
+
+			continue
+		}
+
+		if current.Kind != yaml.MappingNode {
+			return false
+		}
+
+		next := mappingValueWithMerge(current, seg.name)
+		if next == nil {
+			return false
+		}
+
+		current = resolveAlias(next)
+	}
+
+	if current == nil {
+		return false
+	}
+
+	switch typ {
+	case typeMap:
+		return current.Kind == yaml.MappingNode
+	case typeList:
+		return current.Kind == yaml.SequenceNode
+	}
+
+	return false
 }
 
 func findMappingChild(node *yaml.Node, key string) *yaml.Node {
@@ -245,6 +285,72 @@ func resolvePhysicalForMutation(tree *yaml.Node, segments []keySegment) (*yaml.N
 	}
 
 	return current, nil
+}
+
+// findParentSlotReadOnly is the non-mutating variant of findParentSlot used
+// by callers that only read state (e.g. effectiveComments). Alias nodes
+// encountered along the walk are resolved through but never broken, so
+// probing the tree's shape doesn't expand aliases as a side effect — the
+// mutation paths still go through findParentSlot, which intentionally
+// breaks aliases before writing so edits stay local.
+//
+// The returned viaAlias flag reports whether any segment along the path was
+// resolved through an alias. Callers (PatchNodeTree's commentsUnchanged
+// check) use this to skip comment-clearing on aliased leaves: the comments
+// the tree exposes at an aliased position actually live at the anchor
+// source, so an empty entry.HeadComment / LineComment doesn't mean the
+// user wants those source-side comments cleared — applying that as a
+// write would break the alias for no good reason.
+func findParentSlotReadOnly(tree *yaml.Node, segments []keySegment) (*yaml.Node, int, bool, error) {
+	if len(segments) == 0 {
+		return nil, 0, false, errors.New("empty segments")
+	}
+
+	current := tree
+	viaAlias := false
+
+	for i := 0; i < len(segments)-1; i++ {
+		if current.Kind == yaml.AliasNode {
+			viaAlias = true
+			current = resolveAlias(current)
+		}
+
+		// stepPhysical's alias-breaking branch is unreachable here: we
+		// resolveAlias above before each step, so current is always a
+		// non-alias node when stepPhysical inspects it. Reusing it keeps
+		// the index-bounds and mapping-lookup error messages in one place.
+		next, err := stepPhysical(current, segments[i], i)
+		if err != nil {
+			return nil, 0, false, err
+		}
+
+		current = next
+	}
+
+	if current.Kind == yaml.AliasNode {
+		viaAlias = true
+		current = resolveAlias(current)
+	}
+
+	last := segments[len(segments)-1]
+	if last.isIndex {
+		if current.Kind != yaml.SequenceNode || last.index >= len(current.Content) {
+			return nil, 0, false, fmt.Errorf("final segment: index %d out of range", last.index)
+		}
+
+		return current, last.index, viaAlias, nil
+	}
+
+	if current.Kind != yaml.MappingNode {
+		return nil, 0, false, fmt.Errorf("final segment (%q): parent is not a mapping", last.name)
+	}
+
+	idx := mappingKeyIndex(current, last.name)
+	if idx < 0 {
+		return nil, 0, false, fmt.Errorf("final segment (%q): key not present in local mapping", last.name)
+	}
+
+	return current, idx + 1, viaAlias, nil
 }
 
 // findParentSlot walks to the parent of the final segment and returns the
@@ -347,9 +453,11 @@ func forEachMappingChild(n *yaml.Node, prefix string, visit func(childPrefix str
 			continue
 		}
 
-		childPrefix := keyNode.Value
+		encoded := domain.EscapeSegment(keyNode.Value)
+
+		childPrefix := encoded
 		if prefix != "" {
-			childPrefix = prefix + "." + keyNode.Value
+			childPrefix = prefix + "." + encoded
 		}
 
 		visit(childPrefix, n.Content[i+1])
@@ -603,7 +711,7 @@ func setLeaf(current *yaml.Node, seg keySegment, value any) error {
 
 		for len(current.Content) <= seg.index {
 			current.Content = append(current.Content, &yaml.Node{
-				Kind: yaml.ScalarNode, Tag: yamlTagNull, Value: "null",
+				Kind: yaml.ScalarNode, Tag: yamlTagNull, Value: typeNull,
 			})
 		}
 
