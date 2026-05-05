@@ -18,7 +18,7 @@ set -euo pipefail
 GIO_VERSION="v0.9.0"
 PATCH_FILES=(
     "third_party/0001-gesture-refresh-PointerID-on-Press-and-Enter.patch"
-    "third_party/0002-app-windows-stable-PointerID-for-mouse.patch"
+    "third_party/0002-io-input-do-not-track-scroll-events-as-pointers.patch"
 )
 VENDOR_DIR="third_party/gio"
 PROXY_URL="https://proxy.golang.org/gioui.org/@v/${GIO_VERSION}.zip"

@@ -739,6 +739,15 @@ func (q *pointerQueue) Push(handlers map[event.Tag]*handler, state pointerState,
 		state.pointers = nil
 		return state, evts
 	}
+	if e.Kind == pointer.Scroll {
+		// Scroll events aren't bound to a tracked pointer — they're a
+		// one-off dispatch to whatever handlers sit at e.Position. Going
+		// through pointerOf would create a state.pointers entry whose
+		// stale-position hit-test runs every Frame and can overwrite
+		// the live pointer's cursor resolution. Hit-test inline,
+		// deliver, and return without touching state.pointers.
+		return state, q.deliverScrollEvent(handlers, evts, e)
+	}
 	state, pidx := state.pointerOf(e)
 	p := state.pointers[pidx]
 
@@ -761,9 +770,6 @@ func (q *pointerQueue) Push(handlers map[event.Tag]*handler, state pointerState,
 		p.pressed = false
 		p, evts, state.cursor, _ = q.deliverEnterLeaveEvents(handlers, state.cursor, p, evts, e)
 		p, evts = q.deliverDropEvent(handlers, p, evts)
-	case pointer.Scroll:
-		p, evts, state.cursor, _ = q.deliverEnterLeaveEvents(handlers, state.cursor, p, evts, e)
-		evts = q.deliverEvent(handlers, p, evts, e)
 	default:
 		panic("unsupported pointer event type")
 	}
@@ -778,6 +784,22 @@ func (q *pointerQueue) Push(handlers map[event.Tag]*handler, state pointerState,
 		state.pointers[pidx] = p
 	}
 	return state, evts
+}
+
+// deliverScrollEvent dispatches a scroll event without creating a
+// state.pointers entry: the wheel doesn't represent a pointer position the
+// queue should track between events. hitTest finds the handlers under the
+// scroll position; deliverEvent applies their filters and clamps the scroll
+// distance through the chain like a regular Move-tracked pointer would.
+func (q *pointerQueue) deliverScrollEvent(handlers map[event.Tag]*handler, evts []taggedEvent, e pointer.Event) []taggedEvent {
+	var hits []event.Tag
+	q.hitTest(e.Position, func(n *hitNode) bool {
+		if _, ok := handlers[n.tag]; ok {
+			hits = addHandler(hits, n.tag)
+		}
+		return true
+	})
+	return q.deliverEvent(handlers, pointerInfo{handlers: hits}, evts, e)
 }
 
 func (q *pointerQueue) deliverEvent(handlers map[event.Tag]*handler, p pointerInfo, evts []taggedEvent, e pointer.Event) []taggedEvent {

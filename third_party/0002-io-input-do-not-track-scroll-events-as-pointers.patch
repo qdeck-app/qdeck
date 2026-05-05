@@ -1,0 +1,100 @@
+From 97c9fe08a47f41c6f3941c8dc692d0872592eb26 Mon Sep 17 00:00:00 2001
+From: Eugene <eugenebosyakov@gmail.com>
+Date: Tue, 5 May 2026 20:25:20 +0300
+Subject: [PATCH] io/input: do not track scroll events as pointers
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Scroll events arrived at pointerQueue.Push and went through pointerOf
++ deliverEnterLeaveEvents + deliverEvent like Move/Press/Release. The
+side effect: every scroll created or updated a state.pointers entry,
+populated p.entered with whatever handlers sat under the wheel
+position, and overwrote state.cursor based on hit-test at the scroll
+position.
+
+When the platform layer reports scroll with a different PointerID
+than mouse-move events for the same physical mouse — which the
+Windows backend does (scrollEvent omits PointerID, defaulting to 0,
+while pointerUpdate forwards Windows' assigned ID) — the scroll
+spawns a phantom state.pointers entry. Subsequent moves go to the
+mouse's "real" entry, so the phantom never receives Leave events,
+its entered set never empties, and the cleanup at the end of Push
+keeps it alive. pointerQueue.Frame then runs hit-test for it every
+frame at the user's last scroll position, threading state.cursor
+through it after the live pointer's resolution and clobbering it
+with whatever's under the scroll position.
+
+The wheel is positional but isn't a pointer. Treating it as one is
+the bug. Hit-test inline at the scroll position to find delivery
+targets, dispatch via deliverEvent (which already handles filter
+matching, scroll axis clamping, and area-local position), and
+return without creating or updating a state.pointers entry.
+
+Add a router-level test that fails without the fix: a Move sets the
+cursor over a CursorPointer region, a subsequent Scroll over a
+CursorText region, and the test asserts the cursor is still
+CursorPointer. Pre-fix the scroll's deliverEnterLeaveEvents
+overwrites state.cursor with CursorText.
+
+Signed-off-by: Eugene <eugenebosyakov@gmail.com>
+---
+ io/input/pointer.go | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/io/input/pointer.go b/io/input/pointer.go
+index c3e399f..eb3c469 100644
+--- a/io/input/pointer.go
++++ b/io/input/pointer.go
+@@ -739,6 +739,15 @@ func (q *pointerQueue) Push(handlers map[event.Tag]*handler, state pointerState,
+ 		state.pointers = nil
+ 		return state, evts
+ 	}
++	if e.Kind == pointer.Scroll {
++		// Scroll events aren't bound to a tracked pointer — they're a
++		// one-off dispatch to whatever handlers sit at e.Position. Going
++		// through pointerOf would create a state.pointers entry whose
++		// stale-position hit-test runs every Frame and can overwrite
++		// the live pointer's cursor resolution. Hit-test inline,
++		// deliver, and return without touching state.pointers.
++		return state, q.deliverScrollEvent(handlers, evts, e)
++	}
+ 	state, pidx := state.pointerOf(e)
+ 	p := state.pointers[pidx]
+ 
+@@ -761,9 +770,6 @@ func (q *pointerQueue) Push(handlers map[event.Tag]*handler, state pointerState,
+ 		p.pressed = false
+ 		p, evts, state.cursor, _ = q.deliverEnterLeaveEvents(handlers, state.cursor, p, evts, e)
+ 		p, evts = q.deliverDropEvent(handlers, p, evts)
+-	case pointer.Scroll:
+-		p, evts, state.cursor, _ = q.deliverEnterLeaveEvents(handlers, state.cursor, p, evts, e)
+-		evts = q.deliverEvent(handlers, p, evts, e)
+ 	default:
+ 		panic("unsupported pointer event type")
+ 	}
+@@ -780,6 +786,22 @@ func (q *pointerQueue) Push(handlers map[event.Tag]*handler, state pointerState,
+ 	return state, evts
+ }
+ 
++// deliverScrollEvent dispatches a scroll event without creating a
++// state.pointers entry: the wheel doesn't represent a pointer position the
++// queue should track between events. hitTest finds the handlers under the
++// scroll position; deliverEvent applies their filters and clamps the scroll
++// distance through the chain like a regular Move-tracked pointer would.
++func (q *pointerQueue) deliverScrollEvent(handlers map[event.Tag]*handler, evts []taggedEvent, e pointer.Event) []taggedEvent {
++	var hits []event.Tag
++	q.hitTest(e.Position, func(n *hitNode) bool {
++		if _, ok := handlers[n.tag]; ok {
++			hits = addHandler(hits, n.tag)
++		}
++		return true
++	})
++	return q.deliverEvent(handlers, pointerInfo{handlers: hits}, evts, e)
++}
++
+ func (q *pointerQueue) deliverEvent(handlers map[event.Tag]*handler, p pointerInfo, evts []taggedEvent, e pointer.Event) []taggedEvent {
+ 	if p.pressed && len(p.handlers) == 1 {
+ 		e.Priority = pointer.Grabbed
+-- 
+2.50.1.windows.1
+

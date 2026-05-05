@@ -507,22 +507,6 @@ func (w *window) hitTest(x, y int) uintptr {
 	return windows.HTCLIENT
 }
 
-// mouseStablePID is the PointerID reported for every Source=Mouse event so
-// pointerQueue only ever holds a single entry for the physical mouse.
-// Two paths in this file used to produce different IDs for the same mouse:
-// scrollEvent omitted PointerID and let it default to 0, while pointerUpdate
-// forwarded whatever ID Windows assigned via getPointerIDwParam (typically
-// 1+). pointerQueue keys state.pointers by PointerID, so the same physical
-// device produced two persistent entries; the scroll-derived one
-// accumulated entered tags it never released and its stale-position
-// hit-test overwrote the live pointer's cursor resolution every frame.
-// EnableMouseInPointer also reassigns the mouse's PointerID across focus /
-// window-leave events; normalising here absorbs that drift too. Touch
-// keeps Windows-assigned IDs because multi-touch needs distinct pointers.
-// The sentinel is max-uint so it cannot collide with Windows-assigned
-// touch finger IDs (which start at small values).
-var mouseStablePID = ^pointer.ID(0)
-
 func (w *window) pointerUpdate(pi windows.PointerInfo, pid pointer.ID, kind pointer.Kind, lParam uintptr) {
 	if !w.config.Focused {
 		windows.SetFocus(w.hwnd)
@@ -531,7 +515,6 @@ func (w *window) pointerUpdate(pi windows.PointerInfo, pid pointer.ID, kind poin
 	src := pointer.Touch
 	if pi.PointerType == windows.PT_MOUSE {
 		src = pointer.Mouse
-		pid = mouseStablePID
 	}
 
 	x, y := coordsFromlParam(lParam)
@@ -583,7 +566,6 @@ func (w *window) scrollEvent(wParam, lParam uintptr, horizontal bool, kmods key.
 	w.ProcessEvent(pointer.Event{
 		Kind:      pointer.Scroll,
 		Source:    pointer.Mouse,
-		PointerID: mouseStablePID,
 		Position:  p,
 		Buttons:   getPointerButtons(pi),
 		Scroll:    sp,
