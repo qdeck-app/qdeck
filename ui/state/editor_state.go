@@ -2,11 +2,13 @@ package state
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"gioui.org/widget"
 	"gopkg.in/yaml.v3"
 
+	"github.com/qdeck-app/qdeck/domain"
 	"github.com/qdeck-app/qdeck/service"
 )
 
@@ -53,6 +55,10 @@ func LoadedValuesMap(fv *service.FlatValues) map[string]string {
 // save — a zero DocComments leaves the output without any banner or foot
 // blocks. Returns empty string with nil error when no overrides AND no doc
 // comments are present.
+//
+// nullified is the column's NullifiedKeys map: each entry whose key is
+// directly listed emits as `key: ~`, and every strict-descendant entry is
+// dropped so a nullified section produces a single null leaf in the output.
 func OverridesToYAML(
 	entries []service.FlatValueEntry,
 	editors []widget.Editor,
@@ -60,8 +66,9 @@ func OverridesToYAML(
 	tree *yaml.Node,
 	docs service.DocComments,
 	loadedValues map[string]string,
+	nullified map[string]bool,
 ) (string, error) {
-	overrides := collectOverrides(entries, editors, loadedValues)
+	overrides := collectOverrides(entries, editors, loadedValues, nullified)
 	if len(overrides) == 0 && docs.Head == "" && docs.Foot == "" && len(docs.Foots) == 0 {
 		return "", nil
 	}
@@ -80,25 +87,52 @@ func OverridesToYAML(
 // into separate OverrideEntry fields so the serializer can write the block
 // above the key and the inline comment next to the value, matching the style
 // the user typed.
+//
+// Nullified keys are emitted as `key: ~` (Type=null) regardless of inferred
+// type. Strict descendants of any nullified key are dropped — saving a
+// nullified section produces a single null at the section's path. Nullified
+// keys not represented in entries (e.g. an orphan section the chart doesn't
+// declare) are appended at the end so the user's nullify still round-trips.
 func collectOverrides(
 	entries []service.FlatValueEntry,
 	editors []widget.Editor,
 	loadedValues map[string]string,
+	nullified map[string]bool,
 ) []service.OverrideEntry {
 	count := 0
+	seenNullified := 0
 
 	for i := range entries {
 		if i >= len(editors) {
 			break
 		}
 
+		key := entries[i].Key
+		if hasNullifiedAncestor(nullified, key) {
+			continue
+		}
+
+		if nullified[key] {
+			count++
+			seenNullified++
+
+			continue
+		}
+
 		if !entries[i].IsFocusable() {
 			continue
 		}
 
-		if entryHasContent(StripYAMLComments(editors[i].Text()), entries[i].Key, loadedValues) {
+		if entryHasContent(StripYAMLComments(editors[i].Text()), key, loadedValues) {
 			count++
 		}
+	}
+
+	// Nullified keys with no matching entry (e.g. orphan section paths) still
+	// need to round-trip. They contribute to the final entry count.
+	orphanNullified := len(nullified) - seenNullified
+	if orphanNullified > 0 {
+		count += orphanNullified
 	}
 
 	if count == 0 {
@@ -110,6 +144,21 @@ func collectOverrides(
 	for i, entry := range entries {
 		if i >= len(editors) {
 			break
+		}
+
+		if hasNullifiedAncestor(nullified, entry.Key) {
+			continue
+		}
+
+		if nullified[entry.Key] {
+			result = append(result, service.OverrideEntry{
+				Key:         entry.Key,
+				Value:       "~",
+				Type:        service.TypeNull,
+				HeadComment: entry.Comment,
+			})
+
+			continue
 		}
 
 		raw := editors[i].Text()
@@ -172,7 +221,57 @@ func collectOverrides(
 		})
 	}
 
+	if orphanNullified > 0 {
+		seen := make(map[string]bool, len(nullified))
+
+		for i := range entries {
+			if nullified[entries[i].Key] {
+				seen[entries[i].Key] = true
+			}
+		}
+
+		// Sort orphan keys so the saved YAML is byte-stable across runs.
+		// Map-range order is randomized; without this, every save would
+		// shuffle orphan-nullified lines and produce spurious git diffs.
+		orphans := make([]string, 0, orphanNullified)
+
+		for key := range nullified {
+			if seen[key] || hasNullifiedAncestor(nullified, key) {
+				continue
+			}
+
+			orphans = append(orphans, key)
+		}
+
+		slices.Sort(orphans)
+
+		for _, key := range orphans {
+			result = append(result, service.OverrideEntry{
+				Key:   key,
+				Value: "~",
+				Type:  service.TypeNull,
+			})
+		}
+	}
+
 	return result
+}
+
+// hasNullifiedAncestor reports whether any strict ancestor of flatKey is
+// present in the nullified map. The key itself is not consulted — callers
+// check `nullified[key]` directly when they need the exact match.
+func hasNullifiedAncestor(nullified map[string]bool, flatKey string) bool {
+	if len(nullified) == 0 || flatKey == "" {
+		return false
+	}
+
+	for parent := domain.FlatKey(flatKey).Parent(); parent != ""; parent = parent.Parent() {
+		if nullified[string(parent)] {
+			return true
+		}
+	}
+
+	return false
 }
 
 // loadFormForEditor reconstructs the exact text the load step writes into an

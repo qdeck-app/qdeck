@@ -174,6 +174,12 @@ type ValuesPageCallbacks struct {
 	// it, replacing aliases with literal copies of the anchored value so no
 	// data is lost.
 	OnAnchorDelete func(colIdx int, anchorName string)
+
+	// OnCellNullify fires when the user clicks the in-cell nullify button.
+	// Controller marks the cell (or section) as explicitly null, severs any
+	// anchor reach the cell participates in, and republishes the column's
+	// YAML. A second click on an already-nullified cell un-nullifies it.
+	OnCellNullify func(colIdx int, flatKey string)
 }
 
 // ValuesPage renders the unified override editor: default values on the left,
@@ -365,6 +371,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	p.Table.OnCellContextMenu = p.openAnchorMenu
 	p.Table.OnAnchorBadgeClicked = p.openAliasesOfDialog
 	p.Table.OnAnchoredCellEdit = p.openUnlockDialog
+	p.Table.OnCellNullify = p.OnCellNullify
 	p.Table.SearchQuery = p.Search.Editor.Text()
 
 	// Build columnEditors slice for search filter.

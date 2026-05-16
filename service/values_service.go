@@ -22,11 +22,17 @@ const (
 	saveFilePerm   = 0o644
 )
 
+// TypeNull is the Type-tag string the flattener emits for `key: ~` /
+// `key: null` leaves. Exported so UI-layer code can compare against it
+// (detecting nullified leaves on file load, serializing nullified keys
+// back to `~`, rendering the "null" pill label) without re-declaring the
+// literal in every consumer package.
+const TypeNull = "null"
+
 const (
 	typeString  = "string"
 	typeBool    = "bool"
 	typeNumber  = "number"
-	typeNull    = "null"
 	typeUnknown = "unknown"
 	typeMap     = "map"
 	typeList    = "list"
@@ -817,7 +823,7 @@ func flattenValues(source string, vals map[string]any) *domain.ValuesFile {
 			// pass that literal string through to the YAML encoder, replacing
 			// the original `null` / `~` with the four-character "<nil>".
 			// Empty-string Value with Type=null round-trips through
-			// convertValue's typeNull case back to a real nil.
+			// convertValue's TypeNull case back to a real nil.
 			if typedVal == nil {
 				value = ""
 			}
@@ -882,7 +888,7 @@ func inferType(v any) string {
 	case int, int64, float64:
 		return typeNumber
 	case nil:
-		return typeNull
+		return TypeNull
 	default:
 		return typeUnknown
 	}

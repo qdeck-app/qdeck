@@ -24,12 +24,13 @@ import (
 
 // Yaml type-name literals shared between overrideHint and the bool-switch
 // dispatch. Declared here (their primary consumer) so they survive the
-// type_tag.go deletion that removed their previous home.
+// type_tag.go deletion that removed their previous home. The null tag
+// lives on service.TypeNull — re-declaring it locally would create two
+// sources of truth for the same protocol value.
 const (
 	typeNameString  = "string"
 	typeNameNumber  = "number"
 	typeNameBool    = "bool"
-	typeNameNull    = "null"
 	typeNameUnknown = "unknown"
 )
 
@@ -85,7 +86,23 @@ const (
 	overrideBadgePaddingH   unit.Dp = 4 // horizontal padding inside an anchor badge chip
 	overrideBadgePaddingV   unit.Dp = 1 // vertical padding inside an anchor badge chip
 	overrideBadgeRadius     unit.Dp = 2 // corner radius of an anchor badge chip
+	overrideNullifyBtnGap   unit.Dp = 4 // left gap between the editor and the inline nullify button
+	// overrideNullifyBtnTrail keeps the button out from under the
+	// list's scrollbar gutter (overrideScrollbarWidth, 10dp), with a
+	// few extra dp of breathing room so the chrome doesn't visually
+	// touch the scrollbar's override-marker strip.
+	overrideNullifyBtnTrail     unit.Dp = overrideScrollbarWidth + 4
+	overrideNullifyCompactWidth unit.Dp = 80 // narrow-column threshold; below this the null pill uses compact padding
 )
+
+// overrideNullifyButtonInset is the fixed Left/Right inset around the
+// in-cell nullify button. Hoisted to package scope so the row-layout
+// callback doesn't reconstruct the struct literal on every frame for
+// every visible cell.
+var overrideNullifyButtonInset = layout.Inset{
+	Left:  overrideNullifyBtnGap,
+	Right: overrideNullifyBtnTrail,
+}
 
 // OverrideTable renders a unified table with default values on the left and
 // editable override editors on the right. Supports up to MaxCustomColumns
@@ -134,6 +151,8 @@ type OverrideTable struct {
 	defaultBadgeClicks []gesture.Click
 	columnBadgeClicks  [state.MaxCustomColumns][]gesture.Click
 	rightClickTargets  [state.MaxCustomColumns][]rightClickTarget
+	nullifyClicks      [state.MaxCustomColumns][]gesture.Click
+	nullifyHovers      [state.MaxCustomColumns][]gesture.Hover
 
 	// Switch states for bool-typed override cells. Indexed by [col][rowIndex]
 	// (filtered row index, not entry index — matches the rest of the
@@ -241,6 +260,14 @@ type OverrideTable struct {
 	// the anchor so subsequent typing goes through. Not firing this callback
 	// — or doing nothing in it — silently ignores edits on anchored cells.
 	OnAnchoredCellEdit func(col int, flatKey string)
+
+	// OnCellNullify fires when the user clicks the in-cell nullify button.
+	// Carries the column and the cell's flat key. The page-level handler
+	// distinguishes leaf vs section by the entry kind, severs any anchor
+	// reach the cell participates in, and updates NullifiedKeys so the
+	// serializer emits `key: ~`. A second click on an already-nullified
+	// cell un-nullifies it.
+	OnCellNullify func(col int, flatKey string)
 }
 
 func (t *OverrideTable) ensureHovers(count int) {
@@ -299,6 +326,18 @@ func (t *OverrideTable) ensureRightClickTargets(count int) {
 	for c := range state.MaxCustomColumns {
 		if count > len(t.rightClickTargets[c]) {
 			t.rightClickTargets[c] = append(t.rightClickTargets[c], make([]rightClickTarget, count-len(t.rightClickTargets[c]))...)
+		}
+	}
+}
+
+func (t *OverrideTable) ensureNullifyClicks(count int) {
+	for c := range state.MaxCustomColumns {
+		if count > len(t.nullifyClicks[c]) {
+			t.nullifyClicks[c] = append(t.nullifyClicks[c], make([]gesture.Click, count-len(t.nullifyClicks[c]))...)
+		}
+
+		if count > len(t.nullifyHovers[c]) {
+			t.nullifyHovers[c] = append(t.nullifyHovers[c], make([]gesture.Hover, count-len(t.nullifyHovers[c]))...)
 		}
 	}
 }
@@ -371,7 +410,7 @@ func overrideHint(entryType string) string {
 		return "click to override (number)"
 	case typeNameBool:
 		return "click to override (bool)"
-	case typeNameNull:
+	case service.TypeNull:
 		return "click to override (null)"
 	case typeNameUnknown:
 		return "click to override (unknown)"
@@ -393,6 +432,7 @@ func (t *OverrideTable) Layout(
 	t.ensureBadgeClicks(len(filteredIndices))
 	t.ensureSwitchStates(len(filteredIndices))
 	t.ensureRightClickTargets(len(filteredIndices))
+	t.ensureNullifyClicks(len(filteredIndices))
 
 	t.HoveredRow = overrideNoHover
 
@@ -807,12 +847,19 @@ func (t *OverrideTable) layoutRightColumns(
 
 			badgeInfo := t.columnAnchorInfo(col, entryKey)
 			colAnchors := t.columnAnchors(col)
+			showNullify := t.shouldShowNullifyButton(col, rowIndex, entryKey)
+			// Drain the button's hover events once at the cell level so
+			// the same boolean drives the button color AND the help-text
+			// tooltip render below — calling Update twice would split
+			// events between the two consumers.
+			btnHovered := t.nullifyHovers[col][rowIndex].Update(gtx.Source)
 
 			return layout.Inset{Left: overridePaddingH}.Layout(gtx,
 				func(gtx layout.Context) layout.Dimensions {
 					t.drainRightClicks(gtx, col, rowIndex, entryKey)
+					t.drainNullifyClicks(gtx, col, rowIndex, entryKey)
 
-					dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
+					dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 							return t.layoutEditorCell(gtx, col, entryIdx, rowIndex, hint, entryType, entryKey, entries)
 						}),
@@ -821,6 +868,12 @@ func (t *OverrideTable) layoutRightColumns(
 								gtx, badgeInfo, colAnchors,
 								&t.columnBadgeClicks[col][rowIndex], col, entryKey,
 							)
+						}),
+						// Nullify button sits at the cell's right edge after
+						// the badge so its position is identical whether or
+						// not the row carries an anchor/alias annotation.
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return t.layoutNullifyButtonSlot(gtx, col, rowIndex, entryKey, showNullify, btnHovered, overrideNullifyButtonInset)
 						}),
 					)
 
@@ -847,10 +900,13 @@ func (t *OverrideTable) layoutRightColumns(
 	return layout.Flex{}.Layout(gtx, children[:n]...)
 }
 
-// layoutSectionBadges renders just the anchor/alias badge for each active
-// override column on a section row. Section rows have no editor cells, so
-// the badge sits where the editor would be, aligned to the right edge of
-// each column so it lines up with regular-row badges below.
+// layoutSectionBadges renders the anchor/alias badge — and, when the
+// section is directly nullified or hovered, the null pill plus the
+// nullify button — for each active override column on a section row.
+// Section rows have no editor cells; this is the only place a section
+// can advertise "I'm null" inside the table. The button is shown when
+// the row is hovered OR the section is already nullified, so users can
+// always toggle off without having to re-hover the right cell.
 func (t *OverrideTable) layoutSectionBadges(
 	gtx layout.Context,
 	rowIndex int,
@@ -861,6 +917,7 @@ func (t *OverrideTable) layoutSectionBadges(
 	var children [state.MaxCustomColumns * 2]layout.FlexChild
 
 	n := 0
+	hovered := t.HoveredRow == rowIndex
 
 	for c := range g.count {
 		col := c
@@ -873,18 +930,43 @@ func (t *OverrideTable) layoutSectionBadges(
 
 			badgeInfo := t.columnAnchorInfo(col, entryKey)
 			colAnchors := t.columnAnchors(col)
+			direct := t.cellNullifiedDirect(col, entryKey)
+			showNullify := hovered || direct
+			btnHovered := t.nullifyHovers[col][rowIndex].Update(gtx.Source)
 
 			return layout.Inset{Left: overridePaddingH}.Layout(gtx,
 				func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Start}.Layout(gtx,
+					t.drainNullifyClicks(gtx, col, rowIndex, entryKey)
+
+					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+						// Flexed(1) reserves the cell's full body width
+						// for either the null pill (when direct-nullified)
+						// or empty space. Returning zero-size dimensions
+						// here would let Flex place the badge + button
+						// flush against the left edge of the cell — keep
+						// the slot width so the trailing rigids stay
+						// pinned to the right.
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return layout.Dimensions{}
+							if !direct {
+								return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, 0)}
+							}
+
+							pillDims := LayoutNullPill(gtx, t.Theme, gtx.Constraints.Max.X < gtx.Dp(overrideNullifyCompactWidth))
+							pillDims.Size.X = gtx.Constraints.Max.X
+
+							return pillDims
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return t.layoutAnchorBadge(
 								gtx, badgeInfo, colAnchors,
 								&t.columnBadgeClicks[col][rowIndex], col, entryKey,
 							)
+						}),
+						// Match the leaf-cell ordering — button last so it
+						// pins to the right regardless of whether a badge
+						// is present on this section row.
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return t.layoutNullifyButtonSlot(gtx, col, rowIndex, entryKey, showNullify, btnHovered, overrideNullifyButtonInset)
 						}),
 					)
 				})
@@ -900,6 +982,97 @@ func (t *OverrideTable) layoutSectionBadges(
 	}
 
 	return layout.Flex{}.Layout(gtx, children[:n]...)
+}
+
+// layoutNullifyButtonSlot returns a zero-size dimensions when the button is
+// hidden and otherwise lays out the icon inside the supplied inset. Shared
+// between the leaf-cell and section-row paths so both call sites stay in
+// sync on color tokens and click target wiring. `hovered` is the hover
+// state from gesture.Hover.Update — the caller does the Update so it can
+// reuse the same value to drive the tooltip render that lives outside
+// the button's local frame.
+func (t *OverrideTable) layoutNullifyButtonSlot(
+	gtx layout.Context,
+	col, rowIndex int,
+	entryKey string,
+	show, hovered bool,
+	inset layout.Inset,
+) layout.Dimensions {
+	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		// Always report a stable footprint so the editor text and the
+		// anchor badge don't shift sideways when the button toggles
+		// between hidden and visible on hover.
+		if !show {
+			return layoutNullifyButtonPlaceholder(gtx, t.Theme)
+		}
+
+		return layoutNullifyButton(
+			gtx,
+			t.Theme,
+			&t.nullifyClicks[col][rowIndex],
+			&t.nullifyHovers[col][rowIndex],
+			hovered,
+			t.cellNullifiedDirect(col, entryKey),
+		)
+	})
+}
+
+// drainNullifyClicks consumes click events from the per-cell nullify button
+// gesture. Fires OnCellNullify on the trailing-edge click (mouse-up inside
+// the icon area) so a drag started on the icon doesn't accidentally
+// nullify. Each frame may produce at most one click — extra events get
+// drained but ignored.
+func (t *OverrideTable) drainNullifyClicks(gtx layout.Context, col, rowIndex int, entryKey string) {
+	if t.OnCellNullify == nil || rowIndex >= len(t.nullifyClicks[col]) {
+		return
+	}
+
+	for {
+		ev, ok := t.nullifyClicks[col][rowIndex].Update(gtx.Source)
+		if !ok {
+			break
+		}
+
+		if ev.Kind == gesture.KindClick {
+			t.OnCellNullify(col, entryKey)
+		}
+	}
+}
+
+// cellNullifiedDirect reports whether the given cell is currently flagged as
+// explicitly nullified — controls the active-state coloring of the nullify
+// button. Returns false when the column has no state attached (e.g. an
+// extra column slot that hasn't been wired up).
+func (t *OverrideTable) cellNullifiedDirect(col int, flatKey string) bool {
+	cs := t.ColumnStates[col]
+	if cs == nil {
+		return false
+	}
+
+	return cs.IsNullifiedDirect(flatKey)
+}
+
+// cellNullifiedCovered reports whether the given cell is itself nullified
+// or sits below a nullified ancestor section. Drives the null-pill render
+// in editor cells — both states get the same chip so a section nullify
+// reads as one coherent block.
+func (t *OverrideTable) cellNullifiedCovered(col int, flatKey string) bool {
+	cs := t.ColumnStates[col]
+	if cs == nil {
+		return false
+	}
+
+	return cs.IsNullifiedCovered(flatKey)
+}
+
+// shouldShowNullifyButton reports whether the in-cell nullify button is
+// currently visible: either the row is hovered (transient affordance on
+// pointer-over) or the cell is already directly nullified (keep the
+// toggle-off action reachable without re-hovering). Shared by the
+// leaf-cell path; the section-row path inlines the equivalent expression
+// because it also needs the direct flag for the pill render.
+func (t *OverrideTable) shouldShowNullifyButton(col, rowIndex int, flatKey string) bool {
+	return t.HoveredRow == rowIndex || t.cellNullifiedDirect(col, flatKey)
 }
 
 // drawRowDecorations renders the divider line, sub-column dividers, tree guides,

@@ -216,6 +216,7 @@ func (vc *ValuesController) Callbacks() ValuesPageCallbacks {
 		OnUnlockCell:            vc.onUnlockCell,
 		OnAnchorRename:          vc.onAnchorRename,
 		OnAnchorDelete:          vc.onAnchorDelete,
+		OnCellNullify:           vc.onCellNullify,
 	}
 }
 
@@ -629,9 +630,15 @@ func (vc *ValuesController) populateColumnOverrides(colIdx int) {
 		return
 	}
 
+	// Fresh load: NullifiedKeys from a previous file are no longer
+	// applicable. The disk-authoritative pass below re-seeds the map
+	// from any `key: ~` entries it finds.
+	col.NullifiedKeys = nil
+
 	// Build lookup from custom values (flat key match).
 	customMap := make(map[string]string, len(col.CustomValues.Entries))
 	commentMap := make(map[string]string, len(col.CustomValues.Entries))
+	nullKeys := make(map[string]bool)
 
 	for _, e := range col.CustomValues.Entries {
 		// Include scalar-leaf entries unconditionally — even when Value is
@@ -647,6 +654,16 @@ func (vc *ValuesController) populateColumnOverrides(colIdx int) {
 
 		if e.Comment != "" {
 			commentMap[e.Key] = e.Comment
+		}
+
+		// Record explicit-null leaves so the UI can render them as the
+		// "null" pill instead of plain "~" / empty editor text. An
+		// overlay that nulls a key the chart declares as a mapping
+		// (`section: ~`) is flattened as a leaf with Type="null", so
+		// this catches both leaf-level and section-level nullifications
+		// in a single pass.
+		if e.IsNullLeaf() {
+			nullKeys[e.Key] = true
 		}
 	}
 
@@ -694,6 +711,25 @@ func (vc *ValuesController) populateColumnOverrides(colIdx int) {
 	}
 
 	col.RebuildOverrideFlags()
+
+	// Seed NullifiedKeys for every key the overlay marked as explicit
+	// null on disk, and force their override flag so the row tint
+	// reflects the user's intent. The flag wouldn't survive
+	// RebuildOverrideFlags on its own — null leaves carry empty editor
+	// text, which RebuildOverrideFlags treats as "no override".
+	if len(nullKeys) > 0 {
+		for i, entry := range vc.State.Entries {
+			if i >= len(col.OverrideEditors) {
+				break
+			}
+
+			if nullKeys[entry.Key] {
+				col.MarkNullified(entry.Key)
+				col.MarkOverride(i, true)
+			}
+		}
+	}
+
 	col.DrainPendingChanges = true
 	col.ValuesModified = false
 }

@@ -8,11 +8,11 @@ import (
 	"github.com/qdeck-app/qdeck/service"
 )
 
-// typeNull / typeString mirror the canonical values the service package
-// stores in FlatValueEntry.Type. Test-only flat keys are also lifted into
-// constants here so goconst stays quiet.
+// typeString mirrors the canonical value the service package stores in
+// FlatValueEntry.Type for string leaves. Null leaves use service.TypeNull
+// directly. Test-only flat keys are lifted into constants here so goconst
+// stays quiet.
 const (
-	typeNull   = "null"
 	typeString = "string"
 
 	flatKeyImageRegistry  = "global.imageRegistry"
@@ -42,7 +42,7 @@ func TestCollectOverrides_HashInsideStringNotSplit(t *testing.T) {
 
 	loaded := map[string]string{flatKeyAuthPwd: literal}
 
-	overrides := collectOverrides(entries, editors, loaded)
+	overrides := collectOverrides(entries, editors, loaded, nil)
 
 	if len(overrides) != 1 {
 		t.Fatalf("expected 1 override, got %d", len(overrides))
@@ -67,7 +67,7 @@ func TestCollectOverrides_RoundTripEmptyAndNullValues(t *testing.T) {
 
 	entries := []service.FlatValueEntry{
 		{Key: flatKeyImageRegistry, Value: "", Type: typeString, Kind: service.EntryKindLeaf},
-		{Key: flatKeyUsePasswordFls, Value: "", Type: typeNull, Kind: service.EntryKindLeaf},
+		{Key: flatKeyUsePasswordFls, Value: "", Type: service.TypeNull, Kind: service.EntryKindLeaf},
 	}
 
 	editors := make([]widget.Editor, 2)
@@ -81,7 +81,7 @@ func TestCollectOverrides_RoundTripEmptyAndNullValues(t *testing.T) {
 		flatKeyUsePasswordFls: "",
 	}
 
-	overrides := collectOverrides(entries, editors, loaded)
+	overrides := collectOverrides(entries, editors, loaded, nil)
 
 	if len(overrides) != 2 {
 		t.Fatalf("expected 2 overrides, got %d", len(overrides))
@@ -121,7 +121,7 @@ func TestCollectOverrides_EmptyEditorWithNonEmptyDefaultDropped(t *testing.T) {
 	// should still drop the entry.
 	loaded := map[string]string{flatKeyImageTag: flatKeyImageTagValue}
 
-	overrides := collectOverrides(entries, editors, loaded)
+	overrides := collectOverrides(entries, editors, loaded, nil)
 
 	if len(overrides) != 0 {
 		t.Errorf("cleared cell should drop entry; got %d overrides", len(overrides))
@@ -158,7 +158,7 @@ func TestCollectOverrides_ChartMergedAliasPreserved(t *testing.T) {
 	// at this key (the alias-resolved value).
 	loaded := map[string]string{flatKeyAuthPwd: loadedAliased}
 
-	overrides := collectOverrides(entries, editors, loaded)
+	overrides := collectOverrides(entries, editors, loaded, nil)
 
 	if len(overrides) != 1 {
 		t.Fatalf("expected 1 override, got %d", len(overrides))
@@ -194,7 +194,7 @@ func TestCollectOverrides_EmptyDefaultDropped(t *testing.T) {
 	// file doesn't touch.
 	loaded := map[string]string{"some.other.key": "x"}
 
-	overrides := collectOverrides(entries, editors, loaded)
+	overrides := collectOverrides(entries, editors, loaded, nil)
 
 	if len(overrides) != 0 {
 		t.Errorf("chart defaults shouldn't leak into save; got %d overrides", len(overrides))
@@ -252,7 +252,7 @@ func TestCollectOverrides_MultiLineLiteralBlockPreservesHashContent(t *testing.T
 
 	loaded := map[string]string{key: literalValue}
 
-	overrides := collectOverrides(entries, editors, loaded)
+	overrides := collectOverrides(entries, editors, loaded, nil)
 
 	if len(overrides) != 1 {
 		t.Fatalf("expected 1 override, got %d", len(overrides))

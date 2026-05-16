@@ -366,8 +366,8 @@ keep: x
 
 	// Mimic flattenValues' nil handling — Value="" for both null entries.
 	entries := []OverrideEntry{
-		{Key: "usePasswordFiles", Value: "", Type: typeNull},
-		{Key: "explicitNull", Value: "", Type: typeNull},
+		{Key: "usePasswordFiles", Value: "", Type: TypeNull},
+		{Key: "explicitNull", Value: "", Type: TypeNull},
 		{Key: keepKey, Value: "x", Type: typeString},
 	}
 

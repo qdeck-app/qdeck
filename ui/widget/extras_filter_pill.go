@@ -60,10 +60,7 @@ func LayoutExtrasFilterPill(
 		paint.PaintOp{}.Add(gtx.Ops)
 		bgStack.Pop()
 
-		paintRect(gtx, image.Rect(0, 0, w, hairline), borderColor)
-		paintRect(gtx, image.Rect(0, h-hairline, w, h), borderColor)
-		paintRect(gtx, image.Rect(0, 0, hairline, h), borderColor)
-		paintRect(gtx, image.Rect(w-hairline, 0, w, h), borderColor)
+		paintHairlineBorder(gtx, w, h, hairline, borderColor)
 
 		pointer.CursorPointer.Add(gtx.Ops)
 

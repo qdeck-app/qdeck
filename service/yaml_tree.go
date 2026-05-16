@@ -656,7 +656,7 @@ func descendSequence(current *yaml.Node, seg, next keySegment) (*yaml.Node, erro
 
 	for len(current.Content) <= seg.index {
 		current.Content = append(current.Content, &yaml.Node{
-			Kind: yaml.ScalarNode, Tag: yamlTagNull, Value: typeNull,
+			Kind: yaml.ScalarNode, Tag: yamlTagNull, Value: TypeNull,
 		})
 	}
 
@@ -711,7 +711,7 @@ func setLeaf(current *yaml.Node, seg keySegment, value any) error {
 
 		for len(current.Content) <= seg.index {
 			current.Content = append(current.Content, &yaml.Node{
-				Kind: yaml.ScalarNode, Tag: yamlTagNull, Value: typeNull,
+				Kind: yaml.ScalarNode, Tag: yamlTagNull, Value: TypeNull,
 			})
 		}
 
@@ -791,8 +791,8 @@ func convertValue(value, typ string) any {
 			return b
 		}
 
-	case typeNull:
-		if value == typeNull || value == "~" || value == "" {
+	case TypeNull:
+		if value == TypeNull || value == "~" || value == "" {
 			return nil
 		}
 	}
