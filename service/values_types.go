@@ -134,6 +134,14 @@ func (e FlatValueEntry) IsFocusable() bool {
 	return !e.IsSection() && !e.IsComment()
 }
 
+// IsNullLeaf reports whether this entry is an explicit-null scalar (the
+// flattener emits Type="null" for `key: ~` or `key: null` in the source).
+// Used by the UI layer to detect overlay-side nullifications without
+// stringly-comparing the package-private type tag.
+func (e FlatValueEntry) IsNullLeaf() bool {
+	return e.Kind == EntryKindLeaf && e.Type == TypeNull
+}
+
 // IsEmptyContainer reports whether this entry is a container key with no
 // children — flattenValues emits "{}" for an empty mapping and "[]" for an
 // empty sequence, distinguishable from a populated-container section header

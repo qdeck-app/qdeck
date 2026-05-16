@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gioui.org/layout"
@@ -251,7 +252,7 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 	}
 
 	yamlText, err := state.OverridesToYAML(
-		vc.State.Entries, col.OverrideEditors, col.YAMLIndent(), tree, docs, loadedValues,
+		vc.State.Entries, col.OverrideEditors, col.YAMLIndent(), tree, docs, loadedValues, col.NullifiedKeys,
 	)
 	if err != nil {
 		vc.NotifState.Show(err.Error(), state.NotificationError, time.Now())
@@ -735,6 +736,317 @@ func (vc *ValuesController) onAnchorRename(colIdx int, oldName, newName string) 
 	if vc.Window != nil {
 		vc.Window.Invalidate()
 	}
+}
+
+// onCellNullify is the OnCellNullify callback handler. It marks the cell at
+// flatKey in column colIdx as explicitly null, clears any anchor reach the
+// cell participates in (so dangling aliases don't survive the save), and
+// republishes the column's YAML through the same path commitOverrideUpdate
+// uses for normal edits. A second click on an already-nullified cell flips
+// it back to the chart default.
+//
+// Section rows take a different path: the entire subtree gets dropped from
+// the override file and the section becomes a single null leaf at its key.
+// All anchors declared inside the subtree are deleted so external aliases
+// pointing in are severed (each former alias keeps a literal copy of its
+// last resolved value).
+func (vc *ValuesController) onCellNullify(colIdx int, flatKey string) {
+	if colIdx < 0 || colIdx >= state.MaxCustomColumns || flatKey == "" {
+		return
+	}
+
+	col := &vc.State.Columns[colIdx]
+
+	entryIdx, entry, found := vc.findEntry(flatKey)
+	if !found {
+		return
+	}
+
+	switch {
+	case col.IsNullifiedDirect(flatKey):
+		// Direct flag: toggle off — clear the editor and the flag.
+		vc.unnullifyCell(col, entryIdx, entry)
+	case col.IsNullifiedCovered(flatKey):
+		// Covered by an ancestor section nullify: clicking the button on
+		// a descendant breaks out of the section's null reach so this
+		// cell becomes editable. The ancestor's other descendants stay
+		// covered until the user toggles each one explicitly.
+		col.ClearNullified(flatKey)
+	default:
+		vc.nullifyCell(col, entryIdx, entry, flatKey)
+	}
+
+	col.ValuesModified = true
+
+	vc.publishColumnYAML(col, colIdx)
+
+	if vc.Window != nil {
+		vc.Window.Invalidate()
+	}
+}
+
+// findEntry returns the index, entry, and presence flag for the given flat
+// key in the unified entry list. Linear scan; same approach as
+// cellValueAndType — Entries is small and the call sites are user-driven.
+func (vc *ValuesController) findEntry(flatKey string) (int, service.FlatValueEntry, bool) {
+	for i, entry := range vc.State.Entries {
+		if entry.Key == flatKey {
+			return i, entry, true
+		}
+	}
+
+	return 0, service.FlatValueEntry{}, false
+}
+
+// nullifyCell applies a nullify to either a leaf or a section row. Splits
+// here rather than in onCellNullify so the toggle path (unnullifyCell)
+// stays narrow and self-contained.
+func (vc *ValuesController) nullifyCell(
+	col *state.CustomColumnState,
+	entryIdx int,
+	entry service.FlatValueEntry,
+	flatKey string,
+) {
+	if entry.IsSection() {
+		vc.nullifySection(col, flatKey)
+
+		return
+	}
+
+	vc.severAnchorAtKey(col, flatKey)
+
+	if entryIdx < len(col.OverrideEditors) {
+		// Preserve whatever head comment the user (or the loaded file)
+		// has on this cell so the "why is this null" annotation
+		// survives the toggle. The serializer ignores editor text once
+		// NullifiedKeys carries the key, but the UI reads the editor
+		// text to surface the comment next to the null pill. When the
+		// cell carries no comment yet, fall back to the canonical
+		// "null" literal so auto-clear's null-text guard still
+		// recognises the cell as nullified.
+		ed := &col.OverrideEditors[entryIdx]
+
+		head := state.ExtractLeadingComment(ed.Text())
+		if head != "" {
+			ed.SetText(formatNullCellEditor(head))
+		} else if ed.Text() == "" {
+			ed.SetText(service.TypeNull)
+		}
+
+		col.MarkOverride(entryIdx, true)
+	}
+
+	col.MarkNullified(flatKey)
+}
+
+// formatNullCellEditor reconstructs the editor text for a nullified cell
+// that carries a head comment. Each comment line keeps its `# ` prefix;
+// the value line is the canonical "null" literal so auto-clear's
+// null-aware guard treats programmatic SetText events as no-ops.
+func formatNullCellEditor(head string) string {
+	if head == "" {
+		return service.TypeNull
+	}
+
+	// Pre-size the buffer: head's bytes + ("# " + "\n") per line plus the
+	// trailing null literal. strings.Count is one scan instead of two;
+	// cheaper than re-growing the builder a couple of times for typical
+	// multi-line head blocks.
+	const perLineOverhead = len("# ") + len("\n")
+
+	lines := strings.Count(head, "\n") + 1
+
+	var b strings.Builder
+
+	b.Grow(len(head) + lines*perLineOverhead + len(service.TypeNull))
+
+	for _, line := range strings.Split(head, "\n") {
+		b.WriteString("# ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+
+	b.WriteString(service.TypeNull)
+
+	return b.String()
+}
+
+// unnullifyCell removes the explicit-null flag and reverts the cell (or
+// section) to whatever it would have been without the nullify: empty
+// editor text → chart default surfaces through. For a section, descendant
+// editors stay cleared (we wiped them on nullify) but the user can edit
+// them again now that the ancestor flag is gone.
+func (vc *ValuesController) unnullifyCell(
+	col *state.CustomColumnState,
+	entryIdx int,
+	entry service.FlatValueEntry,
+) {
+	col.ClearNullified(entry.Key)
+
+	if entry.IsSection() {
+		return
+	}
+
+	if entryIdx < len(col.OverrideEditors) {
+		col.OverrideEditors[entryIdx].SetText("")
+		col.MarkOverride(entryIdx, false)
+	}
+}
+
+// nullifySection wipes the entire subtree from the override-file output:
+// every descendant editor is cleared, every anchor declared inside the
+// subtree is deleted (severing external aliases), and the section flat
+// key is added to NullifiedKeys so collectOverrides emits a single
+// `key: ~` at that path.
+func (vc *ValuesController) nullifySection(col *state.CustomColumnState, sectionKey string) {
+	vc.severAnchorsInSubtree(col, sectionKey)
+
+	for i, e := range vc.State.Entries {
+		if i >= len(col.OverrideEditors) {
+			break
+		}
+
+		if e.Key == sectionKey || !flatKeyHasAncestor(e.Key, sectionKey) {
+			continue
+		}
+
+		col.OverrideEditors[i].SetText("")
+		col.MarkOverride(i, false)
+	}
+
+	// Section's own anchor (if it had one — `master: &masterConfig` style)
+	// is severed too. Re-uses severAnchorAtKey so the Anchors map gets
+	// re-extracted in one place.
+	vc.severAnchorAtKey(col, sectionKey)
+
+	col.MarkNullified(sectionKey)
+}
+
+// severAnchorAtKey removes whichever anchor or alias annotation lives on
+// the cell at flatKey. Anchor sources call DeleteAnchor (severs every
+// alias to a literal copy); aliases call ClearNodeAlias (deep-copies the
+// target value into the alias slot in place). Refreshes the Anchors map
+// when something changed so badges update next frame. No-op when no
+// custom values are loaded or the cell has no anchor annotation.
+func (vc *ValuesController) severAnchorAtKey(col *state.CustomColumnState, flatKey string) {
+	if col.CustomValues == nil || col.CustomValues.NodeTree == nil {
+		return
+	}
+
+	info, ok := col.CustomValues.Anchors[flatKey]
+	if !ok || info.Role == service.AnchorRoleNone {
+		return
+	}
+
+	var err error
+
+	switch info.Role {
+	case service.AnchorRoleAnchor:
+		err = service.DeleteAnchor(col.CustomValues.NodeTree, info.Name)
+	case service.AnchorRoleAlias:
+		err = service.ClearNodeAlias(col.CustomValues.NodeTree, flatKey)
+	case service.AnchorRoleNone:
+	}
+
+	if err != nil {
+		vc.NotifState.Show("Nullify: "+err.Error(), state.NotificationError, time.Now())
+
+		return
+	}
+
+	col.CustomValues.Anchors = service.ExtractAnchors(col.CustomValues.NodeTree)
+}
+
+// severAnchorsInSubtree walks the column's Anchors map and removes every
+// anchor whose flat key sits inside the subtree rooted at sectionKey
+// (excluding the section key itself — that goes through severAnchorAtKey).
+// External aliases pointing into the subtree are severed by DeleteAnchor;
+// internal alias-only annotations get cleared by ClearNodeAlias so the
+// surviving tree has no alias references to nodes that are about to be
+// dropped.
+func (vc *ValuesController) severAnchorsInSubtree(col *state.CustomColumnState, sectionKey string) {
+	if col.CustomValues == nil || col.CustomValues.NodeTree == nil || len(col.CustomValues.Anchors) == 0 {
+		return
+	}
+
+	// Snapshot keys first — DeleteAnchor mutates the tree in place, and
+	// ExtractAnchors at the end will rebuild the map; iterating the
+	// original map while it's being indirectly invalidated is fine, but
+	// the snapshot makes the loop bound stable.
+	descendants := make([]string, 0, len(col.CustomValues.Anchors))
+	for key := range col.CustomValues.Anchors {
+		if key != sectionKey && flatKeyHasAncestor(key, sectionKey) {
+			descendants = append(descendants, key)
+		}
+	}
+
+	for _, key := range descendants {
+		info, ok := col.CustomValues.Anchors[key]
+		if !ok {
+			continue
+		}
+
+		var err error
+
+		switch info.Role {
+		case service.AnchorRoleAnchor:
+			err = service.DeleteAnchor(col.CustomValues.NodeTree, info.Name)
+		case service.AnchorRoleAlias:
+			err = service.ClearNodeAlias(col.CustomValues.NodeTree, key)
+		case service.AnchorRoleNone:
+		}
+
+		if err != nil {
+			vc.NotifState.Show("Nullify section: "+err.Error(), state.NotificationError, time.Now())
+
+			return
+		}
+	}
+
+	if len(descendants) > 0 {
+		col.CustomValues.Anchors = service.ExtractAnchors(col.CustomValues.NodeTree)
+	}
+}
+
+// publishColumnYAML regenerates the column's YAML and routes it through
+// onColumnOverrideChanged — the same path commitOverrideUpdate uses on
+// editor changes — so the parse-and-republish state machine stays in
+// sync after a controller-initiated mutation.
+func (vc *ValuesController) publishColumnYAML(col *state.CustomColumnState, colIdx int) {
+	var (
+		tree         *yaml.Node
+		docs         service.DocComments
+		loadedValues map[string]string
+	)
+
+	if col.CustomValues != nil {
+		tree = col.CustomValues.NodeTree
+		docs = col.DocCommentsForSave()
+		loadedValues = state.LoadedValuesMap(col.CustomValues)
+	}
+
+	yamlText, err := state.OverridesToYAML(
+		vc.State.Entries, col.OverrideEditors, col.YAMLIndent(),
+		tree, docs, loadedValues, col.NullifiedKeys,
+	)
+	vc.onColumnOverrideChanged(colIdx, yamlText, err)
+}
+
+// flatKeyHasAncestor reports whether `child` has `ancestor` somewhere on
+// its parent chain. Honours FlatKey escapes via domain.FlatKey.Parent so
+// keys with literal '.' or '[' segments still walk correctly.
+func flatKeyHasAncestor(child, ancestor string) bool {
+	if child == "" || ancestor == "" || child == ancestor {
+		return false
+	}
+
+	for k := domain.FlatKey(child).Parent(); k != ""; k = k.Parent() {
+		if string(k) == ancestor {
+			return true
+		}
+	}
+
+	return false
 }
 
 // onAnchorDelete removes an anchor and severs every alias pointing at it.

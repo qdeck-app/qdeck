@@ -96,6 +96,22 @@ func (t *OverrideTable) processEditorChanges(
 			t.drainEditorEvents(gtx, &editors[entryIdx])
 		}
 
+		// User typed into a cell that was masked by a nullified ancestor
+		// (or was itself flagged null). Drop the flag so the keystrokes
+		// land in the saved file instead of being silently discarded by
+		// collectOverrides' descendant-skip rule. Skip when the text is
+		// the canonical null literal OR empty — those arrive as
+		// ChangeEvents after the controller's own SetText calls
+		// (nullifyCell sets "null", nullifySection clears descendants to
+		// ""), not real user edits. A real "user breaks out of a
+		// nullified section" gesture types real content into the cell.
+		if t.ColumnStates[c] != nil && t.ColumnStates[c].IsNullifiedCovered(entryKey) {
+			trimmed := strings.TrimSpace(state.StripYAMLComments(editors[entryIdx].Text()))
+			if trimmed != "" && trimmed != "~" && trimmed != service.TypeNull {
+				t.ColumnStates[c].ClearNullified(entryKey)
+			}
+		}
+
 		t.commitOverrideUpdate(gtx, c, entryIdx, entryKey, entries)
 	}
 }
@@ -132,10 +148,13 @@ func (t *OverrideTable) commitOverrideUpdate(
 		tree         *yaml.Node
 		docs         service.DocComments
 		loadedValues map[string]string
+		nullified    map[string]bool
 	)
 
 	if cs := t.ColumnStates[c]; cs != nil {
 		indent = cs.YAMLIndent()
+		nullified = cs.NullifiedKeys
+
 		if cs.CustomValues != nil {
 			tree = cs.CustomValues.NodeTree
 			docs = cs.DocCommentsForSave()
@@ -143,7 +162,7 @@ func (t *OverrideTable) commitOverrideUpdate(
 		}
 	}
 
-	yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree, docs, loadedValues)
+	yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree, docs, loadedValues, nullified)
 	t.OnChanged(c, yamlText, yamlErr)
 }
 
@@ -160,7 +179,10 @@ func (t *OverrideTable) drainEditorEvents(gtx layout.Context, ed *widget.Editor)
 
 // handleCellClick focuses the correct column editor when a right-cell click occurs,
 // or copies the field key to clipboard when the left key area is clicked. For
-// section rows the whole row copies the key since there are no value cells.
+// section rows the left panel (key + colon) copies the key; the right panel
+// hosts inline action affordances (anchor badges, the nullify button) and
+// must NOT trigger a copy on click — otherwise pressing those buttons
+// silently puts the section path on the clipboard, which surprises users.
 func (t *OverrideTable) handleCellClick(
 	gtx layout.Context,
 	index int,
@@ -182,8 +204,11 @@ func (t *OverrideTable) handleCellClick(
 		}
 
 		clickX := ev.Position.X
-		if section || clickX < g.rightStart {
-			// Left-side click (or anywhere on a section row): copy the key path.
+		if clickX < g.rightStart {
+			// Left-side click (key + default-value area): copy the key
+			// path. Applies to both sections and leaves — sections have
+			// a wide key area thanks to the section colon and indent,
+			// so users still have plenty of target to click for copy.
 			gtx.Execute(clipboard.WriteCmd{
 				Type: "text/plain",
 				Data: io.NopCloser(strings.NewReader(entryKey)),
@@ -193,6 +218,13 @@ func (t *OverrideTable) handleCellClick(
 				t.OnKeyCopied(entryKey)
 			}
 
+			continue
+		}
+
+		// Right-side click: focus the editor under the cursor. Skip for
+		// section rows — they have no editor; the right area is for
+		// inline actions whose own gesture handlers process the click.
+		if section {
 			continue
 		}
 
@@ -217,11 +249,12 @@ func (t *OverrideTable) handleCellClick(
 		}
 	}
 
-	// Show pointer cursor over the left key area (click-to-copy). For section
-	// rows the entire row is clickable, so the pointer cursor spans it.
+	// Show pointer cursor over the left key area (click-to-copy). The
+	// right side is left to its inline action widgets (badges, buttons)
+	// to register their own cursors.
 	keyW := g.leftW / 2 //nolint:mnd // key column is half of the left panel
 	if section {
-		keyW = g.rightStart + rightW
+		keyW = g.rightStart
 	}
 
 	keyArea := clip.Rect{Max: image.Pt(keyW, rowH)}.Push(gtx.Ops)

@@ -312,12 +312,12 @@ func PatchNodeTree(root *yaml.Node, entries []OverrideEntry, indent int, docs Do
 
 // scalarsEquivalent reports whether the tree's effective scalar text and the
 // override entry's value mean the same thing for round-trip purposes. For
-// typeNull the three YAML representations (`null`, `~`, blank `""`) all encode
+// TypeNull the three YAML representations (`null`, `~`, blank `""`) all encode
 // the same value, so treating them as equal here keeps PatchNodeTree's unedited
 // branch from rewriting (and re-styling) a null leaf the user didn't touch.
 // All other types fall back to literal string equality.
 func scalarsEquivalent(treeValue, entryValue, entryType string) bool {
-	if entryType == typeNull && isYAMLNullLiteral(treeValue) && isYAMLNullLiteral(entryValue) {
+	if entryType == TypeNull && isYAMLNullLiteral(treeValue) && isYAMLNullLiteral(entryValue) {
 		return true
 	}
 
@@ -325,7 +325,7 @@ func scalarsEquivalent(treeValue, entryValue, entryType string) bool {
 }
 
 func isYAMLNullLiteral(s string) bool {
-	return s == "" || s == "~" || s == typeNull
+	return s == "" || s == "~" || s == TypeNull
 }
 
 // applyDocFoots writes each (leafKey -> footText) pair as the FootComment of

@@ -111,6 +111,14 @@ type CustomColumnState struct {
 	// GitChanges maps flat keys to their git change status (added/modified vs HEAD).
 	// nil when git comparison is not available or file is not tracked.
 	GitChanges map[string]domain.GitChangeStatus
+
+	// NullifiedKeys marks flat keys (leaves AND sections) the user has
+	// explicitly nullified via the in-cell nullify button. The serializer
+	// emits each entry as `key: ~` regardless of its inferred type, and
+	// drops every descendant of a nullified section so the saved YAML is a
+	// single null at the section root. Session-only — not rebuilt on file
+	// reload; the saved `~` round-trips through type=null leaves.
+	NullifiedKeys map[string]bool
 }
 
 // EnsureEditors grows the override editor slice only when data exceeds capacity.
@@ -166,6 +174,52 @@ func (c *CustomColumnState) MarkOverride(idx int, has bool) {
 	}
 }
 
+// MarkNullified records flatKey as explicitly null. Lazy-allocates the map.
+func (c *CustomColumnState) MarkNullified(flatKey string) {
+	if flatKey == "" {
+		return
+	}
+
+	if c.NullifiedKeys == nil {
+		c.NullifiedKeys = make(map[string]bool)
+	}
+
+	c.NullifiedKeys[flatKey] = true
+}
+
+// IsNullifiedDirect reports whether flatKey itself is in NullifiedKeys (exact
+// match). Used by the editor renderer to style only the nullified cell, not
+// its descendants — covered descendants render through IsNullifiedCovered.
+func (c *CustomColumnState) IsNullifiedDirect(flatKey string) bool {
+	return c.NullifiedKeys[flatKey]
+}
+
+// IsNullifiedCovered reports whether flatKey is itself nullified OR has any
+// nullified ancestor that masks it. Used by the renderer to gray out cells
+// whose value is going to be discarded by an ancestor section nullify.
+func (c *CustomColumnState) IsNullifiedCovered(flatKey string) bool {
+	if c.NullifiedKeys[flatKey] {
+		return true
+	}
+
+	return hasNullifiedAncestor(c.NullifiedKeys, flatKey)
+}
+
+// ClearNullified drops flatKey AND any ancestor key that covered it. Called
+// when the user types into a cell that was previously masked by a section
+// nullify, so the user's keystrokes aren't silently dropped at save time.
+func (c *CustomColumnState) ClearNullified(flatKey string) {
+	if len(c.NullifiedKeys) == 0 || flatKey == "" {
+		return
+	}
+
+	delete(c.NullifiedKeys, flatKey)
+
+	for parent := domain.FlatKey(flatKey).Parent(); parent != ""; parent = parent.Parent() {
+		delete(c.NullifiedKeys, string(parent))
+	}
+}
+
 // RebuildOverrideFlags rescans all editors and rebuilds the override flags.
 // Call after bulk SetText operations (e.g. file load).
 func (c *CustomColumnState) RebuildOverrideFlags() {
@@ -191,6 +245,7 @@ func (c *CustomColumnState) Reset() {
 	c.FileDropActive = false
 	c.EditorParseError = ""
 	c.GitChanges = nil
+	c.NullifiedKeys = nil
 
 	for i := range c.OverrideEditors {
 		c.OverrideEditors[i].SetText("")

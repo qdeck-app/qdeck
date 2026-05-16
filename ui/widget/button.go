@@ -110,10 +110,7 @@ func LayoutButton(
 
 		// Outline (everything except primary).
 		if style != ButtonPrimary {
-			paintRect(gtx, image.Rect(0, 0, w, hairline), cs.border)
-			paintRect(gtx, image.Rect(0, h-hairline, w, h), cs.border)
-			paintRect(gtx, image.Rect(0, 0, hairline, h), cs.border)
-			paintRect(gtx, image.Rect(w-hairline, 0, w, h), cs.border)
+			paintHairlineBorder(gtx, w, h, hairline, cs.border)
 		}
 
 		// Focus-visible ring: 2dp Override outline, 1dp outside the
