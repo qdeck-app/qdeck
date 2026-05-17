@@ -746,10 +746,10 @@ func setLeaf(current *yaml.Node, seg keySegment, value any) error {
 
 func containerForNextSegment(next keySegment) *yaml.Node {
 	if next.isIndex {
-		return &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		return &yaml.Node{Kind: yaml.SequenceNode, Tag: tagSeq}
 	}
 
-	return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	return &yaml.Node{Kind: yaml.MappingNode, Tag: tagMap}
 }
 
 // deletePath removes the physical key at the flat path. Aliases along the way

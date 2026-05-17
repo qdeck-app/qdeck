@@ -6,6 +6,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// yaml.v3 default collection tags. Both the `!!short` and full URI
+// spellings can appear in node.Tag depending on whether the source
+// used an explicit tag directive.
+const (
+	tagMap    = "!!map"
+	tagSeq    = "!!seq"
+	tagMapURI = "tag:yaml.org,2002:map"
+	tagSeqURI = "tag:yaml.org,2002:seq"
+)
+
 // isBlockScalarNode reports whether node is a scalar with a literal `|` or
 // folded `>` style. Style is a bit-field — check via bitmask so combined
 // styles (e.g. TaggedStyle | LiteralStyle) still match.
@@ -28,9 +38,9 @@ func isTaggedCollectionNode(node *yaml.Node) bool {
 
 	switch node.Kind {
 	case yaml.MappingNode:
-		return node.Tag != "!!map" && node.Tag != "tag:yaml.org,2002:map"
+		return node.Tag != tagMap && node.Tag != tagMapURI
 	case yaml.SequenceNode:
-		return node.Tag != "!!seq" && node.Tag != "tag:yaml.org,2002:seq"
+		return node.Tag != tagSeq && node.Tag != tagSeqURI
 	}
 
 	return false

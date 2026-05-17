@@ -10,6 +10,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Shared fixture-row constants reused across save-path tests. The redis
+// cornercase file's `architecture` key (with `replication`/`standalone`
+// as before/after values) and the smaller `replicaCount` leaf are the
+// canonical hand to swap for "single-field edit" scenarios.
+const (
+	fixtureKeyArchitecture = "architecture"
+	fixtureKeyReplicaCount = "replicaCount"
+	fixtureValReplication  = "replication"
+	fixtureValStandalone   = "standalone"
+)
+
 // lineDiffs returns one descriptor per line index where a and b differ.
 // Both inputs are right-trimmed of trailing newlines so a present-vs-
 // absent final newline doesn't register. Lines beyond one side's length
@@ -85,18 +96,18 @@ func TestPatchSourceText_BOM_CRLF_RoundTripsThroughEncodeForFile(t *testing.T) {
 		{
 			name: "no edits — fast path",
 			entries: []OverrideEntry{
-				{Key: "architecture", Value: "replication", Type: typeString},
-				{Key: "replicaCount", Value: "2", Type: typeNumber},
+				{Key: fixtureKeyArchitecture, Value: fixtureValReplication, Type: typeString},
+				{Key: fixtureKeyReplicaCount, Value: "2", Type: typeNumber},
 			},
-			wantValue: "replication",
+			wantValue: fixtureValReplication,
 		},
 		{
 			name: "value edit — splice path",
 			entries: []OverrideEntry{
-				{Key: "architecture", Value: "standalone", Type: typeString},
-				{Key: "replicaCount", Value: "2", Type: typeNumber},
+				{Key: fixtureKeyArchitecture, Value: fixtureValStandalone, Type: typeString},
+				{Key: fixtureKeyReplicaCount, Value: "2", Type: typeNumber},
 			},
-			wantValue: "standalone",
+			wantValue: fixtureValStandalone,
 		},
 	}
 
@@ -166,9 +177,9 @@ func TestSingleFieldEditYieldsSingleLineDiff(t *testing.T) {
 	}
 
 	const (
-		targetKey = "architecture"
-		oldValue  = "replication"
-		newValue  = "standalone"
+		targetKey = fixtureKeyArchitecture
+		oldValue  = fixtureValReplication
+		newValue  = fixtureValStandalone
 	)
 
 	// Build the override list the controller would produce: every
