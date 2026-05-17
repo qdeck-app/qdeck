@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gioui.org/widget"
+	"gopkg.in/yaml.v3"
 
 	"github.com/qdeck-app/qdeck/domain"
 	"github.com/qdeck-app/qdeck/service"
@@ -34,6 +35,24 @@ func (c *CustomColumnState) YAMLIndent() int {
 	}
 
 	return service.DefaultYAMLIndent
+}
+
+// SaveInputs bundles c.CustomValues fields OverridesToYAML needs at each save
+// call site. Zero values when CustomValues is nil.
+func (c *CustomColumnState) SaveInputs() (
+	tree *yaml.Node,
+	docs service.DocComments,
+	loadedValues map[string]string,
+	rawSource []byte,
+) {
+	if c == nil || c.CustomValues == nil {
+		return nil, service.DocComments{}, nil, nil
+	}
+
+	return c.CustomValues.NodeTree,
+		c.DocCommentsForSave(),
+		LoadedValuesMap(c.CustomValues),
+		c.CustomValues.RawBytes
 }
 
 // DocCommentsForSave returns the doc-level orphan comments — banner, trailer,

@@ -31,6 +31,11 @@ type ValuesFile struct {
 	// Used to synthesize comment-only rows in the flattened entry list, and to
 	// round-trip the text on save. nil when the source had none.
 	FootComments map[string]string
+
+	// RawBytes is the verbatim source captured at single-file load; nil for
+	// chart defaults, multi-file merges, and editor parse. Drives the
+	// byte-faithful save path when present.
+	RawBytes []byte
 }
 
 // ValuesEntry is a single key-value pair from a flattened YAML structure.
