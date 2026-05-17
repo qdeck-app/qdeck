@@ -67,13 +67,14 @@ func OverridesToYAML(
 	docs service.DocComments,
 	loadedValues map[string]string,
 	nullified map[string]bool,
+	raw []byte,
 ) (string, error) {
 	overrides := collectOverrides(entries, editors, loadedValues, nullified)
 	if len(overrides) == 0 && docs.Head == "" && docs.Foot == "" && len(docs.Foots) == 0 {
 		return "", nil
 	}
 
-	yamlText, err := service.PatchNodeTree(tree, overrides, indent, docs)
+	yamlText, err := service.PatchSourceText(raw, tree, overrides, indent, docs)
 	if err != nil {
 		return "", fmt.Errorf("overrides to YAML: %w", err)
 	}

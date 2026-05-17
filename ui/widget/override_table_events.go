@@ -14,7 +14,6 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/widget"
-	"gopkg.in/yaml.v3"
 
 	"github.com/qdeck-app/qdeck/service"
 	"github.com/qdeck-app/qdeck/ui/state"
@@ -144,25 +143,19 @@ func (t *OverrideTable) commitOverrideUpdate(
 
 	indent := service.DefaultYAMLIndent
 
-	var (
-		tree         *yaml.Node
-		docs         service.DocComments
-		loadedValues map[string]string
-		nullified    map[string]bool
-	)
+	var nullified map[string]bool
 
-	if cs := t.ColumnStates[c]; cs != nil {
+	cs := t.ColumnStates[c]
+	if cs != nil {
 		indent = cs.YAMLIndent()
 		nullified = cs.NullifiedKeys
-
-		if cs.CustomValues != nil {
-			tree = cs.CustomValues.NodeTree
-			docs = cs.DocCommentsForSave()
-			loadedValues = state.LoadedValuesMap(cs.CustomValues)
-		}
 	}
 
-	yamlText, yamlErr := state.OverridesToYAML(entries, editors, indent, tree, docs, loadedValues, nullified)
+	tree, docs, loadedValues, rawSource := cs.SaveInputs()
+
+	yamlText, yamlErr := state.OverridesToYAML(
+		entries, editors, indent, tree, docs, loadedValues, nullified, rawSource,
+	)
 	t.OnChanged(c, yamlText, yamlErr)
 }
 

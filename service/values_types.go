@@ -71,6 +71,10 @@ type FlatValues struct {
 	// NodeTree was unavailable. Domain-layer Entries stays alphabetical so
 	// ComputeDiff's two-pointer merge keeps working.
 	KeyPositions map[string]int
+
+	// RawBytes mirrors domain.ValuesFile.RawBytes — verbatim source for the
+	// byte-faithful save path; nil otherwise.
+	RawBytes []byte
 }
 
 // EntryKind identifies the role of a FlatValueEntry. Most entries are leaves

@@ -239,20 +239,32 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 
 	col := &vc.State.Columns[colIdx]
 
-	var (
-		tree         *yaml.Node
-		docs         service.DocComments
-		loadedValues map[string]string
-	)
+	// Byte-verbatim short-circuit for unmodified single-file loads. Future
+	// UI handlers that toggle indent/line-ending without touching values
+	// MUST set col.ValuesModified=true or their changes won't take effect.
+	if !col.ValuesModified &&
+		col.CustomValues != nil &&
+		len(col.CustomValues.RawBytes) > 0 &&
+		len(col.CustomFilePaths) == 1 &&
+		col.MergedFileCount <= 1 {
+		path := col.CustomFilePaths[0]
+		raw := col.CustomValues.RawBytes
+		write := func() { vc.saveRawBytesToFile(raw, path) }
 
-	if col.CustomValues != nil {
-		tree = col.CustomValues.NodeTree
-		docs = col.DocCommentsForSave()
-		loadedValues = state.LoadedValuesMap(col.CustomValues)
+		if vc.stashIfExternallyModified(colIdx, path, write) {
+			return
+		}
+
+		write()
+
+		return
 	}
 
+	tree, docs, loadedValues, rawSource := col.SaveInputs()
+
 	yamlText, err := state.OverridesToYAML(
-		vc.State.Entries, col.OverrideEditors, col.YAMLIndent(), tree, docs, loadedValues, col.NullifiedKeys,
+		vc.State.Entries, col.OverrideEditors, col.YAMLIndent(),
+		tree, docs, loadedValues, col.NullifiedKeys, rawSource,
 	)
 	if err != nil {
 		vc.NotifState.Show(err.Error(), state.NotificationError, time.Now())
@@ -263,20 +275,14 @@ func (vc *ValuesController) onSaveColumnValues(colIdx int) {
 	// If a file is already loaded, overwrite it directly without a save dialog.
 	if len(col.CustomFilePaths) > 0 {
 		path := col.CustomFilePaths[0]
+		enc, eol := columnFileEncoding(col)
+		write := func() { vc.saveToFile(yamlText, path, enc, eol) }
 
-		// Check if the file was modified externally since we loaded it.
-		if !col.FileModTime.IsZero() {
-			if info, err := os.Stat(path); err == nil && info.ModTime().After(col.FileModTime) {
-				vc.overwriteDialogActive = true
-				vc.overwritePendingCol = colIdx
-				vc.overwritePendingYAML = yamlText
-
-				return
-			}
+		if vc.stashIfExternallyModified(colIdx, path, write) {
+			return
 		}
 
-		enc, eol := columnFileEncoding(col)
-		vc.saveToFile(yamlText, path, enc, eol)
+		write()
 
 		return
 	}
@@ -316,6 +322,37 @@ func (vc *ValuesController) saveToFile(yamlText, path, encoding, lineEnding stri
 	})
 }
 
+func (vc *ValuesController) saveRawBytesToFile(raw []byte, path string) {
+	vc.ExportRunner.RunWithTimeout(config.FileExportOperation, func(ctx context.Context) (string, error) {
+		if err := vc.ValuesService.SaveRawBytes(ctx, raw, path); err != nil {
+			return "", fmt.Errorf("save raw bytes: %w", err)
+		}
+
+		return path, nil
+	})
+}
+
+// stashIfExternallyModified stashes write for the overwrite dialog when the
+// on-disk file is newer than the column's load-time snapshot. Returns true
+// when the caller should bail; false to proceed with the save.
+func (vc *ValuesController) stashIfExternallyModified(colIdx int, path string, write func()) bool {
+	col := &vc.State.Columns[colIdx]
+	if col.FileModTime.IsZero() {
+		return false
+	}
+
+	info, err := os.Stat(path)
+	if err != nil || !info.ModTime().After(col.FileModTime) {
+		return false
+	}
+
+	vc.overwriteDialogActive = true
+	vc.overwritePendingCol = colIdx
+	vc.overwritePendingWrite = write
+
+	return true
+}
+
 // columnFileEncoding returns the source-file encoding/line-ending preserved on
 // the column's loaded CustomValues so SaveValuesFile can round-trip the
 // original BOM and CRLF shape. Returns ("", "") when the column has nothing
@@ -336,7 +373,7 @@ func (vc *ValuesController) IsOverwriteDialogActive() bool {
 // DismissOverwriteDialog hides the overwrite confirmation dialog without saving.
 func (vc *ValuesController) DismissOverwriteDialog() {
 	vc.overwriteDialogActive = false
-	vc.overwritePendingYAML = ""
+	vc.overwritePendingWrite = nil
 }
 
 // HandleOverwriteDialog processes confirm/cancel clicks on the overwrite-changes dialog.
@@ -349,15 +386,13 @@ func (vc *ValuesController) HandleOverwriteDialog(gtx layout.Context) {
 	case customwidget.ConfirmYes:
 		vc.overwriteDialogActive = false
 
-		col := &vc.State.Columns[vc.overwritePendingCol]
-		if len(col.CustomFilePaths) > 0 {
+		if vc.overwritePendingWrite != nil {
 			vc.pendingSave = saveValues
 			vc.saveColumnIdx = vc.overwritePendingCol
-			enc, eol := columnFileEncoding(col)
-			vc.saveToFile(vc.overwritePendingYAML, col.CustomFilePaths[0], enc, eol)
+			vc.overwritePendingWrite()
 		}
 
-		vc.overwritePendingYAML = ""
+		vc.overwritePendingWrite = nil
 	case customwidget.ConfirmNo:
 		vc.DismissOverwriteDialog()
 	}
@@ -1013,21 +1048,11 @@ func (vc *ValuesController) severAnchorsInSubtree(col *state.CustomColumnState, 
 // editor changes — so the parse-and-republish state machine stays in
 // sync after a controller-initiated mutation.
 func (vc *ValuesController) publishColumnYAML(col *state.CustomColumnState, colIdx int) {
-	var (
-		tree         *yaml.Node
-		docs         service.DocComments
-		loadedValues map[string]string
-	)
-
-	if col.CustomValues != nil {
-		tree = col.CustomValues.NodeTree
-		docs = col.DocCommentsForSave()
-		loadedValues = state.LoadedValuesMap(col.CustomValues)
-	}
+	tree, docs, loadedValues, rawSource := col.SaveInputs()
 
 	yamlText, err := state.OverridesToYAML(
 		vc.State.Entries, col.OverrideEditors, col.YAMLIndent(),
-		tree, docs, loadedValues, col.NullifiedKeys,
+		tree, docs, loadedValues, col.NullifiedKeys, rawSource,
 	)
 	vc.onColumnOverrideChanged(colIdx, yamlText, err)
 }

@@ -212,10 +212,15 @@ func (s *ValuesService) ReadCustomValues(ctx context.Context, filePath string) (
 			vf.FootComments = oc.Foots
 		}
 
-		var doc yaml.Node
-		if parseErr := yaml.Unmarshal(rawData, &doc); parseErr == nil && len(doc.Content) > 0 {
-			vf.NodeTree = doc.Content[0]
-		}
+		// Retain source bytes so an unmodified save writes them back verbatim,
+		// preserving blanks the encoder would normalize. Only the single-file
+		// on-disk read populates this; merge and editor-parse leave it nil.
+		vf.RawBytes = rawData
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(rawData, &doc); err == nil && len(doc.Content) > 0 {
+		vf.NodeTree = doc.Content[0]
 	}
 
 	rewriteValuesFromNodeTree(vf)
@@ -280,6 +285,9 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 		// successful read.
 		firstEnc = EncodingUTF8
 		firstEOL = LineEndingLF
+		// Retained for the splice path when len(paths)==1; multi-file merges
+		// leave it nil — no canonical source to splice against.
+		singleFileRaw []byte
 	)
 
 	for i, path := range paths {
@@ -298,6 +306,10 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 			if i == 0 {
 				indent = DetectYAMLIndent(rawData)
 				firstEnc, firstEOL = DetectFileEncoding(rawData)
+
+				if len(paths) == 1 {
+					singleFileRaw = rawData
+				}
 			}
 
 			if comments, parseErr := parseComments(rawData); parseErr == nil {
@@ -336,6 +348,7 @@ func (s *ValuesService) ReadAndMergeCustomValues(ctx context.Context, paths []st
 	vf.FootComments = lastFoots
 	vf.Encoding = firstEnc
 	vf.LineEnding = firstEOL
+	vf.RawBytes = singleFileRaw
 
 	attachComments(vf, mergedComments)
 	rewriteValuesFromNodeTree(vf)
@@ -367,6 +380,13 @@ func (s *ValuesService) ParseYAMLText(ctx context.Context, yamlText string) (*do
 
 	vf := flattenValues("editor", vals)
 	vf.RawValues = vals
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yamlText), &doc); err == nil && len(doc.Content) > 0 {
+		vf.NodeTree = doc.Content[0]
+	}
+
+	rewriteValuesFromNodeTree(vf)
 
 	return vf, nil
 }
@@ -417,6 +437,21 @@ func (s *ValuesService) SaveValuesFile(
 
 	if err := os.WriteFile(destPath, data, saveFilePerm); err != nil {
 		return fmt.Errorf("save values file to %s: %w", destPath, err)
+	}
+
+	return nil
+}
+
+// SaveRawBytes writes raw verbatim to destPath, bypassing EncodeForFile.
+// The bytes already carry the source BOM and line endings; routing through
+// EncodeForFile would double the BOM and turn \r\n into \r\r\n.
+func (s *ValuesService) SaveRawBytes(ctx context.Context, raw []byte, destPath string) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("save raw bytes: %w", ctx.Err())
+	}
+
+	if err := os.WriteFile(destPath, raw, saveFilePerm); err != nil {
+		return fmt.Errorf("save raw bytes to %s: %w", destPath, err)
 	}
 
 	return nil
@@ -602,6 +637,43 @@ func newFlatValues(vf *domain.ValuesFile) *FlatValues {
 		KeyPositions:   buildFlatKeyPositions(vf.NodeTree),
 		Encoding:       vf.Encoding,
 		LineEnding:     vf.LineEnding,
+		RawBytes:       vf.RawBytes,
+	}
+}
+
+// MergeLoadedMetadata copies load-time metadata from loaded onto parsed
+// (which ParseEditorContent leaves zero on those fields). Per-entry Comments
+// are matched by FlatKey; loaded entries with empty Comment are skipped so
+// the parsed side keeps any newly-typed comment text.
+func MergeLoadedMetadata(parsed, loaded *FlatValues) {
+	if parsed == nil || loaded == nil {
+		return
+	}
+
+	parsed.Indent = loaded.Indent
+	parsed.NodeTree = loaded.NodeTree
+	parsed.Anchors = loaded.Anchors
+	parsed.DocHeadComment = loaded.DocHeadComment
+	parsed.DocFootComment = loaded.DocFootComment
+	parsed.FootComments = loaded.FootComments
+	parsed.RawBytes = loaded.RawBytes
+
+	if len(loaded.Entries) == 0 {
+		return
+	}
+
+	loadedComments := make(map[string]string, len(loaded.Entries))
+
+	for _, e := range loaded.Entries {
+		if e.Comment != "" {
+			loadedComments[e.Key] = e.Comment
+		}
+	}
+
+	for i := range parsed.Entries {
+		if c, ok := loadedComments[parsed.Entries[i].Key]; ok {
+			parsed.Entries[i].Comment = c
+		}
 	}
 }
 

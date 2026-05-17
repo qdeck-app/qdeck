@@ -101,12 +101,16 @@ type ValuesController struct {
 	lastRenderMode    renderMode
 
 	// Overwrite confirmation dialog (shown when file changed on disk).
+	// overwritePendingWrite captures the dispatch the user is about to
+	// confirm — either an EncodeForFile-routed save or a verbatim raw-
+	// bytes write — closed over so the dialog handler doesn't need to
+	// branch on save-shape.
 	overwriteDialog       customwidget.ConfirmDialog
 	overwriteDialogYes    widget.Clickable
 	overwriteDialogNo     widget.Clickable
 	overwriteDialogActive bool
 	overwritePendingCol   int
-	overwritePendingYAML  string
+	overwritePendingWrite func()
 
 	// focusSaver debounces per-chart cell-focus writes to avoid rewriting the
 	// whole AppData JSON on every arrow-key frame.
@@ -399,43 +403,7 @@ func (vc *ValuesController) pollEditorParse() {
 			} else {
 				col.EditorParseError = ""
 
-				// Preserve detected YAML indent from the originally loaded file.
-				// Also preserve the parsed yaml.Node tree: it represents the
-				// on-disk structure (anchors, aliases, comments, styles) and
-				// stays authoritative across edits — ParseEditorContent does
-				// not reparse it, and PatchNodeTree works against a deep copy
-				// so successive saves start from the same original tree.
-				// Doc-level orphan comments (banner/trailer/per-leaf foots)
-				// are similarly load-time metadata: ParseEditorContent only
-				// sees the editor's value text, so it can't recover them —
-				// carry them across so the banner strip and comment-row
-				// renderers don't lose their data on every keystroke.
-				if col.CustomValues != nil {
-					if col.CustomValues.Indent > 0 {
-						res.Value.Indent = col.CustomValues.Indent
-					}
-
-					if col.CustomValues.NodeTree != nil {
-						res.Value.NodeTree = col.CustomValues.NodeTree
-					}
-
-					if col.CustomValues.Anchors != nil {
-						res.Value.Anchors = col.CustomValues.Anchors
-					}
-
-					if col.CustomValues.DocHeadComment != "" {
-						res.Value.DocHeadComment = col.CustomValues.DocHeadComment
-					}
-
-					if col.CustomValues.DocFootComment != "" {
-						res.Value.DocFootComment = col.CustomValues.DocFootComment
-					}
-
-					if col.CustomValues.FootComments != nil {
-						res.Value.FootComments = col.CustomValues.FootComments
-					}
-				}
-
+				service.MergeLoadedMetadata(res.Value, col.CustomValues)
 				col.CustomValues = res.Value
 
 				// Rebuild the unified entry list: cell edits can introduce
