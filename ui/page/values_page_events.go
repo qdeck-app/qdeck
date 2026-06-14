@@ -189,6 +189,11 @@ func collapsedEqual(a, b map[string]bool) bool {
 }
 
 func (p *ValuesPage) handleKeyEvents(gtx layout.Context) {
+	// Intercept the search field's Ctrl/Cmd word chords before the editor's own
+	// Update runs later this frame (a consumed key event is removed from the
+	// queue), working around Gio swallowing them on Windows/Linux.
+	p.handleSearchEditorKeys(gtx)
+
 	area := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
 	event.Op(gtx.Ops, p)
 	area.Pop()

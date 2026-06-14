@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"gioui.org/layout"
 	"gioui.org/widget"
 	"gopkg.in/yaml.v3"
 
@@ -308,11 +309,24 @@ type ValuesPageState struct {
 	Columns     [MaxCustomColumns]CustomColumnState
 	ColumnCount int // 1-3 active columns
 
-	// Unified table: single list with search and filtering
+	// Unified table: single list. Search highlights and jumps between matches
+	// rather than filtering, so FilteredIndices holds every visible row (all
+	// entries minus collapsed sections), independent of the search query.
 	OverrideList    widget.List
 	SearchEditor    widget.Editor
 	FilteredIndices []int
 	FocusSearch     bool
+
+	// Search match navigation. SearchMatches holds the entry indices (into
+	// Entries) whose key/value/comment/override text contains the current
+	// query, in entry order; empty when the query is empty. CurrentMatch is the
+	// index into SearchMatches of the row the user has jumped to (counter shows
+	// CurrentMatch+1), or -1 when there are no matches. SearchPrevButton /
+	// SearchNextButton drive the in-bar jump controls.
+	SearchMatches    []int
+	CurrentMatch     int
+	SearchPrevButton widget.Clickable
+	SearchNextButton widget.Clickable
 
 	// Cell navigation state.
 	// FocusedRow indexes FilteredIndices (not Entries); FocusedCol indexes
@@ -429,6 +443,14 @@ func (s *ValuesPageState) FocusedEntryKey() string {
 	}
 
 	return s.Entries[idx].Key
+}
+
+// SearchFocused reports whether the user is currently working the search bar
+func (s *ValuesPageState) SearchFocused(gtx layout.Context) bool {
+	return s.SearchEditor.Text() != "" &&
+		(gtx.Focused(&s.SearchEditor) ||
+			gtx.Focused(&s.SearchPrevButton) ||
+			gtx.Focused(&s.SearchNextButton))
 }
 
 // firstCustomValues returns the first column with a loaded custom file, or
