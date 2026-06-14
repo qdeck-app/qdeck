@@ -383,7 +383,6 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	p.State.FilteredIndices = p.Search.FilterEntriesWithMultiOverrides(
 		p.State.Entries,
 		p.columnEditorSlices[:p.State.ColumnCount],
-		p.State.ExtrasOnly,
 		p.State.FilteredIndices,
 	)
 
@@ -584,20 +583,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					searchHint := platform.ShortcutLabel("\u2318+F", "Ctrl+F")
 
-					if p.State.ExtrasFilterClick.Clicked(gtx) {
-						p.State.ExtrasOnly = !p.State.ExtrasOnly
-					}
-
-					dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return p.Search.Layout(gtx, p.Theme, "Search values... ("+searchHint+")")
-						}),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Right: valuesSpacing}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-								return customwidget.LayoutExtrasFilterPill(gtx, p.Theme, &p.State.ExtrasFilterClick, p.State.ExtrasOnly)
-							})
-						}),
-					)
+					dims := p.Search.Layout(gtx, p.Theme, "Search values... ("+searchHint+")")
 
 					totalRigidH += dims.Size.Y
 

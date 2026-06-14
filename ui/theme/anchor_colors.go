@@ -9,7 +9,7 @@ import (
 // Anchor color tokens. Each anchor name maps deterministically to a hue via
 // FNV-1a, with fixed saturation and lightness so badges and stripes for the
 // same anchor render identically across runs. Hues that fall too close to the
-// git-indicator bar colors are rotated out so anchor stripes never blur into
+// git-indicator bar color are rotated out so anchor stripes never blur into
 // "this row has uncommitted git changes". Both anchor (`&name`) and alias
 // (`*name`) badges use the same color — the sigil already disambiguates role,
 // and matching colors group an anchor and its aliases at a glance.
@@ -19,10 +19,9 @@ const (
 	anchorSaturation = 0.55
 	anchorLightness  = 0.55
 
-	anchorForbiddenHueGreen = 120.0 // matches ColorGitAddedBar hue
 	anchorForbiddenHueBlue  = 215.0 // matches ColorGitModifiedBar hue
-	anchorForbiddenHalfBand = 15.0  // ± degrees around each forbidden center
-	anchorHueRotation       = 30.0  // rotation applied when hue lands inside a forbidden band
+	anchorForbiddenHalfBand = 15.0  // ± degrees around the forbidden center
+	anchorHueRotation       = 30.0  // rotation applied when hue lands inside the forbidden band
 	anchorHueWheel          = 360.0
 )
 
@@ -34,14 +33,13 @@ func AnchorColor(name string) color.NRGBA {
 }
 
 // hueFromName maps a string to a hue in [0, 360) using FNV-1a, then rotates it
-// out of the forbidden bands around git-indicator hues so anchor stripes can't
-// be confused with git status. Pure, allocation-free.
+// out of the forbidden band around the git-indicator hue so anchor stripes
+// can't be confused with git status. Pure, allocation-free.
 //
-// Invariant: anchorHueRotation must exceed every forbidden band's full width
-// (2 × anchorForbiddenHalfBand) AND each rotation must land outside every
-// other forbidden band. With the current bands (120°, 215°) separated by
-// 95° and rotation 30°, a single pass clears both. If a new band is added
-// or rotation is reduced, replace the single rotation with a re-check loop.
+// Invariant: anchorHueRotation must exceed the forbidden band's full width
+// (2 × anchorForbiddenHalfBand) so a single rotation always clears it. If a
+// new band is added, verify the rotation lands outside every band or replace
+// the single rotation with a re-check loop.
 func hueFromName(name string) float64 {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(name))
@@ -56,8 +54,7 @@ func hueFromName(name string) float64 {
 }
 
 func hueInForbiddenBand(hue float64) bool {
-	return hueDistance(hue, anchorForbiddenHueGreen) < anchorForbiddenHalfBand ||
-		hueDistance(hue, anchorForbiddenHueBlue) < anchorForbiddenHalfBand
+	return hueDistance(hue, anchorForbiddenHueBlue) < anchorForbiddenHalfBand
 }
 
 func hueDistance(a, b float64) float64 {

@@ -268,7 +268,7 @@ func (p *ReposPage) layoutValuesSection(gtx layout.Context) layout.Dimensions {
 	return layoutSectionCard(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layoutSectionHeaderWithHint(gtx, p.Theme, "Values", []string{tabKeyHint, tabKeyHint}, "to focus",
+				return layoutSectionHeaderWithHint(gtx, p.Theme, "Recent Values", []string{tabKeyHint, tabKeyHint}, "to focus",
 					sectionHeaderPaddingTop, sectionHeaderPaddingBottom)
 			}),
 			layout.Rigid(p.layoutValuesDropZone),

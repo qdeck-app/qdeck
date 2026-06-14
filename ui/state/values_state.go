@@ -372,13 +372,6 @@ type ValuesPageState struct {
 	RenderLoading         bool
 	ShowDocs              widget.Bool
 
-	// ExtrasOnly is the toggle state for the "✚ extras-only" filter pill
-	// in the search bar. When true, FilterEntriesWithMultiOverrides only
-	// returns entries with IsCustomOnly == true (keys defined only in
-	// the overlay file with no chart-defaults counterpart).
-	ExtrasOnly        bool
-	ExtrasFilterClick widget.Clickable
-
 	// Helm install command (cached, rebuilt on chart/file changes)
 	HelmInstallCmd    string
 	CopyInstallButton widget.Clickable

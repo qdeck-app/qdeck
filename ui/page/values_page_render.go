@@ -169,15 +169,11 @@ func (p *ValuesPage) LayoutShortcutsHelp(gtx layout.Context) layout.Dimensions {
 			// "extra" — keys defined only in the overlay with no chart
 			// default. The cyan-teal swatch matches the in-grid wash and
 			// the "+" chip on the key cell.
-			return p.layoutLegendItem(gtx, theme.Default.Extra, "extra (override-only)")
+			return p.layoutLegendItem(gtx, theme.Default.Extra, "not in chart")
 		}),
 		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return p.layoutLegendItem(gtx, theme.Default.Override, "override")
-		}),
-		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return p.layoutLegendItem(gtx, theme.Default.Added, "git added")
 		}),
 		layout.Rigid(layout.Spacer{Width: helpLegendItemGap}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {

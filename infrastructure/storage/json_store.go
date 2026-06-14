@@ -25,6 +25,7 @@ type AppData struct {
 	RecentValuesEntries []domain.RecentValuesEntry     `json:"recentValuesEntries,omitempty"`
 	ShowDocs            *bool                          `json:"showDocs,omitempty"`
 	ChartUIStates       map[string]domain.ChartUIState `json:"chartUiStates,omitempty"`
+	WindowGeometry      *domain.WindowGeometry         `json:"windowGeometry,omitempty"`
 }
 
 // JSONStore reads and writes AppData to a JSON file.

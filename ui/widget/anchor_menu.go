@@ -34,7 +34,7 @@ const (
 	anchorMenuPadding    unit.Dp = 4
 	anchorMenuRowPadH    unit.Dp = 10
 	anchorMenuRadius     unit.Dp = 6
-	anchorMenuShadowA            = 40
+	anchorMenuShadowA            = 64
 	anchorMenuShadowOffX         = 1
 	anchorMenuShadowOffY         = 2
 )

@@ -22,10 +22,10 @@ import (
 // since the design tokens are explicitly OKLCH colors with hue and
 // these have no hue.
 //
-//nolint:mnd // 12/8 alpha values are inherent to the shadow design.
+//nolint:mnd // 28/20 alpha values are inherent to the shadow design.
 var (
-	cardShadowOuter = color.NRGBA{A: 12}
-	cardShadowInner = color.NRGBA{A: 8}
+	cardShadowOuter = color.NRGBA{A: 28}
+	cardShadowInner = color.NRGBA{A: 20}
 )
 
 const (
@@ -122,25 +122,36 @@ func layoutCardFocusable(gtx layout.Context, click *widget.Clickable, focused bo
 
 		paintCardShadow(gtx, bounds, radius)
 
+		// Fill lighter than the Bg2 section card so each row reads as a raised
+		// tile instead of blending into the panel behind it.
 		bgRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-		paint.ColorOp{Color: theme.Default.Bg2}.Add(gtx.Ops)
+		paint.ColorOp{Color: theme.Default.Bg}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		bgRect.Pop()
 
+		// Active-state wash painted over the tile fill.
+		var wash color.NRGBA
+
 		switch {
 		case focused:
-			focusRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-			paint.ColorOp{Color: theme.Default.RowSelected}.Add(gtx.Ops)
-			paint.PaintOp{}.Add(gtx.Ops)
-			focusRect.Pop()
-
-			bw := gtx.Dp(focusBorderWidth)
-			paintFocusBorder(gtx, bounds, bw)
+			wash = theme.Default.RowSelected
 		case hovered:
-			hoverRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
-			paint.ColorOp{Color: theme.Default.RowHover}.Add(gtx.Ops)
+			wash = theme.Default.RowHover
+		}
+
+		if wash != (color.NRGBA{}) {
+			washRect := clip.UniformRRect(bounds, radius).Push(gtx.Ops)
+			paint.ColorOp{Color: wash}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
-			hoverRect.Pop()
+			washRect.Pop()
+		}
+
+		// Edge: a focused row gets the strong focus ring; every other row gets a
+		// hairline border so its boundary stays crisp against the section card.
+		if focused {
+			paintFocusBorder(gtx, bounds, gtx.Dp(focusBorderWidth))
+		} else {
+			paintEdgeBorder(gtx, bounds, gtx.Dp(theme.Default.HairlineWidth), theme.Default.Border)
 		}
 
 		c.Add(gtx.Ops)

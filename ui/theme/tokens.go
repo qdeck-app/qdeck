@@ -47,12 +47,10 @@ type Tokens struct {
 	Override       color.NRGBA // amber stripe
 	OverrideBg     color.NRGBA // wash behind overridden cell
 	OverrideStrong color.NRGBA // text on override wash
-	Added          color.NRGBA // git-added stripe (green)
-	AddedBg        color.NRGBA // green wash
-	AddedStrong    color.NRGBA // text on green wash
 	Modified       color.NRGBA // git-modified stripe (blue)
 	ModifiedBg     color.NRGBA // blue wash
 	ModifiedStrong color.NRGBA // text on blue wash
+	Success        color.NRGBA // green accent for success notifications
 
 	// Danger — error / destructive accent. Used for failure notifications,
 	// destructive button labels (Delete), and stats showing removed keys.
@@ -66,10 +64,8 @@ type Tokens struct {
 	// Cyan-teal sits in the unused slot of the wheel (we already use
 	// amber/green/blue/purple) and reads as "additive" without claiming a
 	// git-staged meaning.
-	Extra       color.NRGBA // strip color, key chip border
-	ExtraBg     color.NRGBA // wash behind override cell when row is extra
-	ExtraStrong color.NRGBA // text on the wash, key chip text
-	ExtraFaint  color.NRGBA // wash behind key cell when descendant of an extra branch
+	Extra      color.NRGBA // strip color, key chip border
+	ExtraFaint color.NRGBA // wash behind key cell when descendant of an extra branch
 
 	// Traffic-light dots — titlebar (mac-style).
 	TrafficRed   color.NRGBA
@@ -189,19 +185,15 @@ func newDefaultTokens() (t struct {
 		Override:       oklchOpaque(0.72, 0.13, 75),
 		OverrideBg:     oklchOpaque(0.96, 0.04, 80),
 		OverrideStrong: oklchOpaque(0.58, 0.14, 60),
-		Added:          oklchOpaque(0.68, 0.12, 145),
-		AddedBg:        oklchOpaque(0.96, 0.035, 145),
-		AddedStrong:    oklchOpaque(0.40, 0.10, 145),
 		Modified:       oklchOpaque(0.63, 0.13, 240),
 		ModifiedBg:     oklchOpaque(0.96, 0.025, 240),
 		ModifiedStrong: oklchOpaque(0.40, 0.12, 240),
+		Success:        oklchOpaque(0.68, 0.12, 145),
 
 		Danger: oklchOpaque(0.58, 0.20, 25),
 
-		Extra:       oklchOpaque(0.66, 0.13, 195),
-		ExtraBg:     oklchOpaque(0.96, 0.03, 195),
-		ExtraStrong: oklchOpaque(0.48, 0.14, 195),
-		ExtraFaint:  oklchOpaque(0.985, 0.012, 195),
+		Extra:      oklchOpaque(0.66, 0.13, 195),
+		ExtraFaint: oklchOpaque(0.985, 0.012, 195),
 
 		TrafficRed:   oklchOpaque(0.70, 0.15, 25),
 		TrafficAmber: oklchOpaque(0.82, 0.13, 85),

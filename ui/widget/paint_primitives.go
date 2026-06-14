@@ -40,7 +40,7 @@ func paintRect(gtx layout.Context, r image.Rectangle, c color.NRGBA) {
 // on rounded-rect chrome at sizes where a true clip.Stroke around an RRect
 // would be overkill — the corners read square at hairline thickness anyway.
 // Replaces the open-coded "four paintRect calls" idiom that lived in
-// null_pill, nullify_icon, extras_filter_pill, and button.
+// null_pill, nullify_icon, and button.
 func paintHairlineBorder(gtx layout.Context, w, h, hairline int, c color.NRGBA) {
 	paintRect(gtx, image.Rect(0, 0, w, hairline), c)
 	paintRect(gtx, image.Rect(0, h-hairline, w, h), c)

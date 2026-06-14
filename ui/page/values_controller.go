@@ -64,7 +64,7 @@ type ValuesController struct {
 	// Services
 	ValuesService   *service.ValuesService
 	TemplateService *service.TemplateService
-	RecentService   *service.RecentService
+	AppState        *service.AppStateService
 	ChartService    *service.ChartService
 
 	// Async runners
@@ -148,7 +148,7 @@ func NewValuesController(
 	expl *explorer.Explorer,
 	valuesSvc *service.ValuesService,
 	templateSvc *service.TemplateService,
-	recentSvc *service.RecentService,
+	appState *service.AppStateService,
 	chartSvc *service.ChartService,
 ) *ValuesController {
 	vc := &ValuesController{
@@ -160,7 +160,7 @@ func NewValuesController(
 		Explorer:        expl,
 		ValuesService:   valuesSvc,
 		TemplateService: templateSvc,
-		RecentService:   recentSvc,
+		AppState:        appState,
 		ChartService:    chartSvc,
 	}
 
@@ -181,7 +181,7 @@ func NewValuesController(
 	vc.overwriteDialog.NoButton = &vc.overwriteDialogNo
 
 	vc.focusSaver = async.NewDebouncer(cellFocusSaveDelay, func(j chartFocusJob) {
-		if err := recentSvc.SaveChartUIState(context.Background(), j.chartKey, j.state); err != nil {
+		if err := appState.SaveChartUIState(context.Background(), j.chartKey, j.state); err != nil {
 			slog.Error("save chart ui state", "error", err, "key", j.chartKey)
 		}
 	})
@@ -536,7 +536,7 @@ func (vc *ValuesController) LoadDefaultValues(chartPath string) {
 
 func (vc *ValuesController) LoadRecentValues() {
 	vc.RecentValuesRunner.RunWithTimeout(config.RecentValuesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesFile, error) {
-		return vc.RecentService.ListRecentValues(ctx)
+		return vc.AppState.ListRecentValues(ctx)
 	})
 }
 
@@ -851,10 +851,10 @@ func (vc *ValuesController) loadSavedCellFocusAsync() {
 		return
 	}
 
-	recentSvc := vc.RecentService
+	appState := vc.AppState
 
 	vc.ChartUIStateRunner.RunWithTimeout(config.ChartUIStateLoadOperation, func(ctx context.Context) (chartUIStateResult, error) {
-		st, ok, err := recentSvc.LoadChartUIState(ctx, key)
+		st, ok, err := appState.LoadChartUIState(ctx, key)
 		if err != nil {
 			return chartUIStateResult{}, fmt.Errorf("load chart ui state: %w", err)
 		}

@@ -5,21 +5,24 @@ package revealer
 import (
 	"context"
 	"os/exec"
-
-	"github.com/qdeck-app/qdeck/infrastructure/executil"
+	"syscall"
 )
 
 // revealFile opens Windows Explorer with the specified file selected.
-// The /select, flag tells Explorer to open the parent folder and highlight the file.
 func revealFile(path string) {
 	ctx, cancel := context.WithTimeout(context.Background(), revealTimeout)
 
 	go func() {
 		defer cancel()
 
-		cmd := exec.CommandContext(ctx, "explorer", `/select,`+path) //nolint:gosec // Path is pre-validated by resolve(): Clean, Abs, EvalSymlinks.
-		executil.HideWindow(cmd)
+		// CommandContext resolves explorer.exe on PATH into cmd.Path; the
+		// explicit CmdLine then controls the exact quoting passed to it.
+		cmd := exec.CommandContext(ctx, "explorer")
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CmdLine: `explorer /select,"` + path + `"`, //nolint:gosec // Path pre-validated by resolve(): Clean, Abs, EvalSymlinks.
+		}
 
+		// Explorer returns exit code 1 even on success
 		_ = cmd.Run()
 	}()
 }

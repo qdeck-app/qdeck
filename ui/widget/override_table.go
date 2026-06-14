@@ -733,8 +733,10 @@ func (t *OverrideTable) layoutRow(
 	// to communicate (the only value IS the override).
 	switch {
 	case entry.IsCustomOnly:
+		// Extras carry their cyan signal through the faint key-cell tint and
+		// the left strip only — the editable value cell keeps the plain grid
+		// background so its wash never competes with the editor content.
 		paintRowBgTo(gtx, g.rightStart, dims.Size.Y, theme.Default.ExtraFaint)
-		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.Default.ExtraBg)
 		paintOverrideStrip(gtx, g.rightStart, dims.Size.Y, theme.Default.Extra)
 	case hasOverride:
 		// Override and git tints both describe a change in the user's file,
@@ -743,9 +745,6 @@ func (t *OverrideTable) layoutRow(
 		// key+default columns also changed, which they didn't.
 		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.Default.OverrideBg)
 		paintOverrideStrip(gtx, g.rightStart, dims.Size.Y, theme.Default.Override)
-	case gitStatus == domain.GitAdded:
-		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.Default.AddedBg)
-		paintOverrideStrip(gtx, g.rightStart, dims.Size.Y, theme.Default.Added)
 	case gitStatus == domain.GitModified:
 		paintRowBgFrom(gtx, g.rightStart, dims.Size.Y, theme.Default.ModifiedBg)
 		paintOverrideStrip(gtx, g.rightStart, dims.Size.Y, theme.Default.Modified)
@@ -801,13 +800,8 @@ func (t *OverrideTable) layoutRow(
 	t.drawRowDecorations(gtx, g, entry, dims, totalW)
 
 	// Git change indicator bar on the override cell's left edge.
-	if gitStatus != domain.GitUnchanged {
-		barColor := theme.Default.Added
-		if gitStatus == domain.GitModified {
-			barColor = theme.Default.Modified
-		}
-
-		paintGitIndicator(gtx, g.rightStart, dims.Size.Y, barColor)
+	if gitStatus == domain.GitModified {
+		paintGitIndicator(gtx, g.rightStart, dims.Size.Y, theme.Default.Modified)
 	}
 
 	return dims
@@ -1193,26 +1187,18 @@ func (t *OverrideTable) hasAnyOverride(entryIdx int) bool {
 	return false
 }
 
-// gitChangeStatus returns the highest-priority git change status for the given flat key
-// across all active columns. GitModified takes precedence over GitAdded.
+// gitChangeStatus returns GitModified if any active column reports the given
+// flat key as differing from the git HEAD revision, else GitUnchanged.
 func (t *OverrideTable) gitChangeStatus(key string) domain.GitChangeStatus {
-	best := domain.GitUnchanged
-
 	for c := range t.colCount() {
 		if t.ColumnStates[c] != nil && t.ColumnStates[c].GitChanges != nil {
-			if status, ok := t.ColumnStates[c].GitChanges[key]; ok {
-				if status == domain.GitModified {
-					return domain.GitModified
-				}
-
-				if status > best {
-					best = status
-				}
+			if status, ok := t.ColumnStates[c].GitChanges[key]; ok && status == domain.GitModified {
+				return domain.GitModified
 			}
 		}
 	}
 
-	return best
+	return domain.GitUnchanged
 }
 
 // CurrentParent returns the parent key path of the first row currently visible

@@ -95,7 +95,7 @@ func (vc *ValuesController) OnColumnFilesSelected(colIdx int, paths []string) {
 				return
 			}
 
-			if err := vc.RecentService.AddRecentValues(ctx, p); err != nil {
+			if err := vc.AppState.AddRecentValues(ctx, p); err != nil {
 				slog.Warn("failed to save recent values entry", "path", p, "error", err)
 			}
 		}
@@ -190,11 +190,11 @@ func (vc *ValuesController) onSelectRecentValues(path string) {
 //nolint:dupl // same Runner pattern as addRecentChart but calls different service method on different receiver.
 func (vc *ValuesController) onRemoveRecentValues(idx int) {
 	vc.RecentValuesRunner.RunWithTimeout(config.RecentValuesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesFile, error) {
-		if err := vc.RecentService.RemoveRecentValues(ctx, idx); err != nil {
+		if err := vc.AppState.RemoveRecentValues(ctx, idx); err != nil {
 			return nil, fmt.Errorf("remove recent values: %w", err)
 		}
 
-		return vc.RecentService.ListRecentValues(ctx)
+		return vc.AppState.ListRecentValues(ctx)
 	})
 }
 
@@ -549,7 +549,7 @@ func (vc *ValuesController) OnSaveChartVersion(chartName, version string) {
 
 func (vc *ValuesController) onShowDocsChanged(show bool) {
 	go func() {
-		if err := vc.RecentService.SaveShowDocs(context.Background(), show); err != nil {
+		if err := vc.AppState.SaveShowDocs(context.Background(), show); err != nil {
 			slog.Error("save show docs preference", "error", err)
 		}
 	}()

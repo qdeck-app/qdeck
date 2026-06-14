@@ -5,6 +5,5 @@ type GitChangeStatus uint8
 
 const (
 	GitUnchanged GitChangeStatus = iota
-	GitAdded                     // present in working copy, absent in HEAD
 	GitModified                  // present in both but value differs
 )
