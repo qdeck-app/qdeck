@@ -41,6 +41,8 @@ const glyphBatchSize = 256
 // wash because it covers much more area.
 var SearchHighlightColor = color.NRGBA{R: 255, G: 215, B: 0, A: 200} //nolint:mnd // saturated amber highlight
 
+var CurrentMatchHighlightColor = color.NRGBA{R: 255, G: 122, B: 0, A: 235} //nolint:mnd // saturated orange highlight
+
 // LayoutEditor lays out a material.EditorStyle, rendering the hint text with
 // the larger glyph batch so it doesn't exhibit the vertical-stripe artefact.
 // The shaper must be the same *text.Shaper used by the theme (th.Shaper) since
@@ -103,11 +105,17 @@ func LabelWidget(l material.LabelStyle) layout.Widget {
 	}
 }
 
-// LayoutHighlightedLabel renders lbl with a yellow rectangle painted behind
-// the first case-insensitive occurrence of query inside lbl.Text. Forces
+// LayoutHighlightedLabel renders lbl with the amber SearchHighlightColor wash
+// behind the first match of query. See LayoutHighlightedLabelColor.
+func LayoutHighlightedLabel(gtx layout.Context, lbl material.LabelStyle, query string) layout.Dimensions {
+	return LayoutHighlightedLabelColor(gtx, lbl, query, SearchHighlightColor)
+}
+
+// LayoutHighlightedLabelColor renders lbl with a hl-colored rectangle painted
+// behind the first case-insensitive occurrence of query inside lbl.Text. Forces
 // MaxLines to 1 so the highlight rect can't smear across wrapped lines.
 // ASCII-only — see measureMatchRange.
-func LayoutHighlightedLabel(gtx layout.Context, lbl material.LabelStyle, query string) layout.Dimensions {
+func LayoutHighlightedLabelColor(gtx layout.Context, lbl material.LabelStyle, query string, hl color.NRGBA) layout.Dimensions {
 	lbl.MaxLines = 1
 
 	if query == "" {
@@ -129,7 +137,7 @@ func LayoutHighlightedLabel(gtx layout.Context, lbl material.LabelStyle, query s
 
 	if x1 > x0 {
 		rect := clip.Rect{Min: image.Pt(x0, 0), Max: image.Pt(x1, dims.Size.Y)}.Push(gtx.Ops)
-		paint.ColorOp{Color: SearchHighlightColor}.Add(gtx.Ops)
+		paint.ColorOp{Color: hl}.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		rect.Pop()
 	}

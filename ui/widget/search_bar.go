@@ -15,7 +15,8 @@ import (
 	"github.com/qdeck-app/qdeck/ui/theme"
 )
 
-// SearchBar wraps an Editor and provides filtered index computation.
+// SearchBar wraps an Editor and computes the indices of matching entries so the
+// caller can highlight and jump between them (it does not filter the table).
 type SearchBar struct {
 	Editor *widget.Editor
 
@@ -77,11 +78,13 @@ func (s *SearchBar) rebuildCacheIfNeeded(entries []service.FlatValueEntry) {
 	})
 }
 
-// FilterEntriesWithMultiOverrides returns indices matching key, value, comment,
-// or override editor text across multiple columns.
+// MatchingEntries returns the indices of entries whose key, value, comment, or
+// override editor text (across columns) contains the current query. Unlike a
+// filter, an empty query yields no matches — the table shows every row and the
+// caller navigates between these indices instead of hiding non-matches.
 //
 // Reuses the provided out slice to avoid per-frame allocations.
-func (s *SearchBar) FilterEntriesWithMultiOverrides(
+func (s *SearchBar) MatchingEntries(
 	entries []service.FlatValueEntry,
 	columnEditors [][]widget.Editor,
 	out []int,
@@ -89,11 +92,11 @@ func (s *SearchBar) FilterEntriesWithMultiOverrides(
 	query := strings.ToLower(s.Editor.Text())
 	out = out[:0]
 
-	matchesQuery := func(i int) bool {
-		if query == "" {
-			return true
-		}
+	if query == "" {
+		return out
+	}
 
+	matchesQuery := func(i int) bool {
 		if strings.Contains(s.lowerKeys[i], query) ||
 			strings.Contains(s.lowerValues[i], query) ||
 			strings.Contains(s.lowerComments[i], query) {
@@ -109,11 +112,17 @@ func (s *SearchBar) FilterEntriesWithMultiOverrides(
 		return false
 	}
 
-	if query != "" {
-		s.rebuildCacheIfNeeded(entries)
-	}
+	s.rebuildCacheIfNeeded(entries)
 
 	for i := range entries {
+		// Orphan-comment rows have an empty Key, so the caller can't scroll to
+		// or highlight them — counting them would yield phantom matches the
+		// prev/next buttons skip over. Their prose is still reachable via the
+		// key/value of neighbouring rows.
+		if entries[i].IsComment() {
+			continue
+		}
+
 		if !matchesQuery(i) {
 			continue
 		}
@@ -131,7 +140,10 @@ const (
 )
 
 // Layout renders the search text field with a border spanning the full width.
-func (s *SearchBar) Layout(gtx layout.Context, th *material.Theme, hint string) layout.Dimensions {
+// trailing, when non-nil, is laid out as a rigid to the right of the editor
+// (e.g. the match counter and prev/next navigation buttons); it is vertically
+// centered against the editor so the controls share the field's baseline.
+func (s *SearchBar) Layout(gtx layout.Context, th *material.Theme, hint string, trailing layout.Widget) layout.Dimensions {
 	borderW := gtx.Dp(searchBorderWidth)
 	width := gtx.Constraints.Max.X
 
@@ -148,7 +160,7 @@ func (s *SearchBar) Layout(gtx layout.Context, th *material.Theme, hint string) 
 
 			return layout.Dimensions{Size: sz}
 		}),
-		// Editor content.
+		// Editor content plus optional trailing navigation controls.
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min.X = width
 
@@ -156,9 +168,20 @@ func (s *SearchBar) Layout(gtx layout.Context, th *material.Theme, hint string) 
 				Top: searchPaddingV, Bottom: searchPaddingV,
 				Left: searchPaddingH, Right: searchPaddingH,
 			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				editor := material.Editor(th, s.Editor, hint)
+				editorField := func(gtx layout.Context) layout.Dimensions {
+					editor := material.Editor(th, s.Editor, hint)
 
-				return LayoutEditor(gtx, th.Shaper, editor)
+					return LayoutEditor(gtx, th.Shaper, editor)
+				}
+
+				if trailing == nil {
+					return editorField(gtx)
+				}
+
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, editorField),
+					layout.Rigid(trailing),
+				)
 			})
 		}),
 	)

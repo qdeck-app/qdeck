@@ -501,40 +501,33 @@ func (s *ValuesService) CompareWithBaseline(
 	return changes, nil
 }
 
-// ApplyCollapseFilter removes entries whose key has any collapsed ancestor,
-// i.e. the entry sits inside a user-collapsed section. The collapsed section
-// header itself is kept visible so the user can click its chevron to expand
-// again. Reuses `out` (truncated) to avoid per-frame allocation; `out` and
-// `indices` may safely alias — the write pointer never overtakes the read
-// pointer. When `collapsed` is empty the function short-circuits and returns
-// `indices` unchanged (no copy into `out`).
-func ApplyCollapseFilter(
-	entries []FlatValueEntry,
-	indices []int,
-	collapsed map[string]bool,
-	out []int,
-) []int {
-	if len(collapsed) == 0 {
-		return indices
-	}
-
+// VisibleRows returns the entry indices that render as table rows: every entry
+// except those hidden inside a user-collapsed section (the collapsed section
+// header itself stays visible so its chevron can re-expand it). When `collapsed`
+// is empty this is simply 0..len(entries)-1. Reuses `out` (truncated) to avoid
+// per-frame allocation.
+func VisibleRows(entries []FlatValueEntry, collapsed map[string]bool, out []int) []int {
 	out = out[:0]
+
+	if len(collapsed) == 0 {
+		for i := range entries {
+			out = append(out, i)
+		}
+
+		return out
+	}
 
 	// Comment rows have no flat key of their own — visibility piggy-backs on the
 	// most recently seen non-comment row so a foot comment under a collapsed
 	// section disappears with that section.
 	lastNonCommentVisible := true
 
-	for _, idx := range indices {
-		if idx >= len(entries) {
-			continue
-		}
-
-		entry := entries[idx]
+	for i := range entries {
+		entry := entries[i]
 
 		if entry.IsComment() {
 			if lastNonCommentVisible {
-				out = append(out, idx)
+				out = append(out, i)
 			}
 
 			continue
@@ -546,7 +539,7 @@ func ApplyCollapseFilter(
 		if collapsed[key] {
 			lastNonCommentVisible = true
 
-			out = append(out, idx)
+			out = append(out, i)
 
 			continue
 		}
@@ -564,7 +557,7 @@ func ApplyCollapseFilter(
 		lastNonCommentVisible = !hidden
 
 		if !hidden {
-			out = append(out, idx)
+			out = append(out, i)
 		}
 	}
 

@@ -216,6 +216,9 @@ type ValuesPage struct {
 	lastFocusedRow int
 	lastFocusedCol int
 
+	// lastSearchQuery caches the previous frame's query
+	lastSearchQuery string
+
 	// AnchorDialog and AnchorMenu are the widget instances driving the
 	// anchor/alias mutation UI. They live on the page (not state) so state
 	// types don't need to import ui/widget. The page's Layout wires them to
@@ -245,14 +248,17 @@ type ValuesPage struct {
 
 func NewValuesPage(th *material.Theme, st *state.ValuesPageState, cb ValuesPageCallbacks) *ValuesPage {
 	st.SearchEditor.SingleLine = true
+	st.SearchEditor.Submit = true // Enter jumps to the next match
+	st.CurrentMatch = -1
 
 	p := &ValuesPage{
 		Theme: th,
 		State: st,
 		Table: customwidget.OverrideTable{
-			Theme:      th,
-			List:       &st.OverrideList,
-			HoveredRow: -1,
+			Theme:             th,
+			List:              &st.OverrideList,
+			HoveredRow:        -1,
+			CurrentMatchEntry: -1,
 		},
 		Search:              customwidget.SearchBar{Editor: &st.SearchEditor},
 		ValuesPageCallbacks: cb,
@@ -374,54 +380,45 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 	p.Table.OnCellNullify = p.OnCellNullify
 	p.Table.SearchQuery = p.Search.Editor.Text()
 
-	// Build columnEditors slice for search filter.
+	// Build columnEditors slice for the search match scan.
 	for c := range p.State.ColumnCount {
 		p.columnEditorSlices[c] = p.State.Columns[c].OverrideEditors
 	}
 
-	// Recompute filtered indices.
-	p.State.FilteredIndices = p.Search.FilterEntriesWithMultiOverrides(
+	// Search highlights and jumps rather than filtering: SearchMatches holds the
+	// matching entry indices; FilteredIndices (every visible row, built below
+	// after any jump-induced uncollapse) stays independent of the query.
+	p.State.SearchMatches = p.Search.MatchingEntries(
 		p.State.Entries,
 		p.columnEditorSlices[:p.State.ColumnCount],
-		p.State.FilteredIndices,
+		p.State.SearchMatches,
 	)
 
 	// Snapshot the user's collapsed set when search becomes active, so that
 	// any search-induced auto-uncollapse below can be reverted when the user
 	// clears the search. Restore on the reverse transition.
 	inSearch := p.Search.Editor.Text() != ""
-	wasActive := p.State.SearchCollapseActive
 	p.syncSearchCollapseSnapshot(inSearch)
 
-	// Reset scroll to the top on the empty→non-empty search transition so the
-	// first match is visible instead of hidden below the prior scroll offset.
-	if !wasActive && p.State.SearchCollapseActive {
-		p.State.OverrideList.Position.First = 0
-		p.State.OverrideList.Position.Offset = 0
-	}
-
-	// Auto-expand any collapsed ancestors of search matches so results are
-	// never hidden. Mutates CollapsedKeys only — CollapsedPreSearch retains
-	// the user's intent and is what the controller persists while
 	// SearchCollapseActive is true, so nothing is lost on search clear.
 	if inSearch && len(p.State.CollapsedKeys) > 0 {
 		service.UncollapseMatchAncestors(
 			p.State.Entries,
-			p.State.FilteredIndices,
+			p.State.SearchMatches,
 			p.State.CollapsedKeys,
 		)
 	}
 
-	// Hide entries inside collapsed sections. Skipped during an active search
-	// so matches inside (previously) collapsed sections stay visible.
-	if !inSearch && len(p.State.CollapsedKeys) > 0 {
-		p.State.FilteredIndices = service.ApplyCollapseFilter(
-			p.State.Entries,
-			p.State.FilteredIndices,
-			p.State.CollapsedKeys,
-			p.State.FilteredIndices,
-		)
-	}
+	p.handleSearchNavigation(gtx)
+
+	// Build the visible-row list (all entries minus collapsed sections). Done
+	// after navigation so a jump's uncollapse of its target's ancestors is
+	// reflected this frame.
+	p.State.FilteredIndices = service.VisibleRows(
+		p.State.Entries,
+		p.State.CollapsedKeys,
+		p.State.FilteredIndices,
+	)
 
 	// Resolve a pending restored focus key to a filtered row. If the key is no
 	// longer visible (filtered out or removed from the chart), drop the
@@ -480,6 +477,8 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 
 	p.Table.FocusedRow = p.State.FocusedRow
 	p.Table.FocusedCol = p.State.FocusedCol
+	p.Table.CurrentMatchEntry = p.currentMatchEntry()
+	p.Table.SearchMatches = p.State.SearchMatches
 
 	// When the controller signals a pending focus highlight (fires once per
 	// chart load after the async UI-state load completes), focus the
@@ -518,13 +517,15 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 			editors := p.State.Columns[p.State.FocusedCol].OverrideEditors
 
 			if entryIdx < len(editors) {
-				searchBusy := gtx.Focused(p.Search.Editor) && p.Search.Editor.Text() != ""
+				// Don't steal focus into the cell while the user is working the
+				// search bar (field or a nav button)
+				searchBusy := p.State.SearchFocused(gtx)
 
 				switch {
 				case gtx.Focused(&editors[entryIdx]):
 					// Focus landed — stop retrying.
 				case searchBusy:
-					// User is actively typing in search; don't steal focus.
+					// User is actively working search; don't steal focus.
 				default:
 					gtx.Execute(key.FocusCmd{Tag: &editors[entryIdx]})
 					gtx.Execute(op.InvalidateCmd{})
@@ -583,7 +584,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					searchHint := platform.ShortcutLabel("\u2318+F", "Ctrl+F")
 
-					dims := p.Search.Layout(gtx, p.Theme, "Search values... ("+searchHint+")")
+					dims := p.Search.Layout(gtx, p.Theme, "Search values... ("+searchHint+")", p.layoutSearchNav)
 
 					totalRigidH += dims.Size.Y
 

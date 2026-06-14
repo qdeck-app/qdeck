@@ -60,23 +60,24 @@ const (
 	overrideKeyProportion   = 0.5
 	overrideValueProportion = 0.5
 
-	overridePaddingV       unit.Dp = 4
-	overridePaddingH       unit.Dp = 8
-	overrideIndentPerLevel unit.Dp = 12
-	overrideScrollbarWidth unit.Dp = 10 // MinorWidth(6) + 2*MinorPadding(2)
-	overrideSeparatorH     unit.Dp = 1
-	overrideTreeGuideW     unit.Dp = 1
-	overrideDividerW       unit.Dp = 2
-	overrideSubDividerW    unit.Dp = 1
-	overrideNoHover                = -1
-	overrideMarkerW        unit.Dp = 4
-	overrideMarkerMinH     unit.Dp = 2
-	overrideIndentGuideW   unit.Dp = 1
-	overrideIndentDotLen   unit.Dp = 2
-	overrideIndentDotGap   unit.Dp = 3
-	overrideChevronSlotW   unit.Dp = 14 // fixed slot reserved before every key label
-	overrideChevronSize    unit.Dp = 6  // edge length of the filled chevron triangle
-	overrideBadgeGap       unit.Dp = 4  // left margin between the key label and anchor/alias badge
+	overridePaddingV        unit.Dp = 4
+	overridePaddingH        unit.Dp = 8
+	overrideIndentPerLevel  unit.Dp = 12
+	overrideScrollbarWidth  unit.Dp = 10 // MinorWidth(6) + 2*MinorPadding(2)
+	overrideSeparatorH      unit.Dp = 1
+	overrideTreeGuideW      unit.Dp = 1
+	overrideDividerW        unit.Dp = 2
+	overrideSubDividerW     unit.Dp = 1
+	overrideNoHover                 = -1
+	overrideMarkerW         unit.Dp = 4
+	overrideMarkerMinH      unit.Dp = 2
+	overrideMatchMarkerCurH unit.Dp = 4 // active-match scrollbar tick — taller than the override/match ticks
+	overrideIndentGuideW    unit.Dp = 1
+	overrideIndentDotLen    unit.Dp = 2
+	overrideIndentDotGap    unit.Dp = 3
+	overrideChevronSlotW    unit.Dp = 14 // fixed slot reserved before every key label
+	overrideChevronSize     unit.Dp = 6  // edge length of the filled chevron triangle
+	overrideBadgeGap        unit.Dp = 4  // left margin between the key label and anchor/alias badge
 	// overrideCommentMaxLines clamps how many lines an orphan-comment row paints.
 	// Foot blocks in real chart values can be 20+ lines (commented-out YAML
 	// example configurations are common), and rendering all of them would push
@@ -144,6 +145,14 @@ type OverrideTable struct {
 	// labels paint a yellow highlight behind the first case-insensitive match.
 	// Set by the page before Layout each frame.
 	SearchQuery string
+
+	// CurrentMatchEntry is the entry index of the active search match (the hit
+	// the prev/next buttons last jumped to), or -1 when none.
+	CurrentMatchEntry int
+
+	// SearchMatches holds the entry indices that match the active query, in
+	// ascending order, or empty when not searching.
+	SearchMatches []int
 
 	hovers             []gesture.Hover
 	cellClicks         []gesture.Click
@@ -497,6 +506,7 @@ func (t *OverrideTable) layoutRow(
 
 	indent := overrideIndentPerLevel * unit.Dp(max(0, entry.Depth-1))
 	section := entry.IsSection()
+	isCurrentMatch := entryIdx == t.CurrentMatchEntry
 
 	hovered := t.hovers[index].Update(gtx.Source)
 	if hovered {
@@ -636,7 +646,12 @@ func (t *OverrideTable) layoutRow(
 													return t.layoutChevronSlot(gtx, index, entry.Key, section)
 												}),
 												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-													return LayoutHighlightedLabel(gtx, lbl, t.SearchQuery)
+													hl := SearchHighlightColor
+													if isCurrentMatch {
+														hl = CurrentMatchHighlightColor
+													}
+
+													return LayoutHighlightedLabelColor(gtx, lbl, t.SearchQuery, hl)
 												}),
 											)
 										})
@@ -709,6 +724,10 @@ func (t *OverrideTable) layoutRow(
 	var gitStatus domain.GitChangeStatus
 	if !section {
 		gitStatus = t.gitChangeStatus(entries[entryIdx].Key)
+	}
+
+	if isCurrentMatch {
+		paintRowBg(gtx, dims.Size.Y, theme.Default.RowSelected)
 	}
 
 	// Paint hover / selected wash first so the per-axis tints below
@@ -1230,7 +1249,7 @@ func (t *OverrideTable) CurrentParent(entries []service.FlatValueEntry, filtered
 	return ""
 }
 
-// layoutScrollbarMarkers draws colored markers alongside the scrollbar for overridden entries.
+// layoutScrollbarMarkers draws colored markers alongside the scrollbar
 func (t *OverrideTable) layoutScrollbarMarkers(
 	gtx layout.Context,
 	entries []service.FlatValueEntry,
@@ -1248,23 +1267,50 @@ func (t *OverrideTable) layoutScrollbarMarkers(
 	markerH := max(gtx.Dp(overrideMarkerMinH), 1)
 	scrollX := totalW - gtx.Dp(overrideScrollbarWidth)
 
-	for visIdx, entryIdx := range filteredIndices {
-		if entryIdx >= len(entries) {
-			continue
-		}
-
-		if !t.hasAnyOverride(entryIdx) {
-			continue
-		}
-
-		y := int(float64(visIdx) / float64(totalEntries) * float64(totalH))
-
-		rect := clip.Rect{
-			Min: image.Pt(scrollX, y),
-			Max: image.Pt(scrollX+markerW, y+markerH),
-		}.Push(gtx.Ops)
-		paint.ColorOp{Color: theme.Default.Override}.Add(gtx.Ops)
-		paint.PaintOp{}.Add(gtx.Ops)
-		rect.Pop()
+	markerY := func(visIdx int) int {
+		return int(float64(visIdx) / float64(totalEntries) * float64(totalH))
 	}
+
+	for visIdx, entryIdx := range filteredIndices {
+		if entryIdx >= len(entries) || !t.hasAnyOverride(entryIdx) {
+			continue
+		}
+
+		paintScrollMarker(gtx, scrollX, markerY(visIdx), markerW, markerH, theme.Default.Override)
+	}
+
+	if len(t.SearchMatches) == 0 {
+		return
+	}
+
+	// Match markers span the full gutter so they read as a distinct band from
+	// the thin override ticks. SearchMatches and filteredIndices are both in
+	// ascending entry order, so a single forward pointer resolves membership.
+	gutterW := gtx.Dp(overrideScrollbarWidth)
+	currentH := max(gtx.Dp(overrideMatchMarkerCurH), markerH)
+	mi := 0
+
+	for visIdx, entryIdx := range filteredIndices {
+		for mi < len(t.SearchMatches) && t.SearchMatches[mi] < entryIdx {
+			mi++
+		}
+
+		if mi >= len(t.SearchMatches) || t.SearchMatches[mi] != entryIdx {
+			continue
+		}
+
+		if entryIdx == t.CurrentMatchEntry {
+			paintScrollMarker(gtx, scrollX, markerY(visIdx), gutterW, currentH, CurrentMatchHighlightColor)
+		} else {
+			paintScrollMarker(gtx, scrollX, markerY(visIdx), gutterW, markerH, SearchHighlightColor)
+		}
+	}
+}
+
+// paintScrollMarker fills a w×h rectangle at (x, y) with c — one scrollbar tick.
+func paintScrollMarker(gtx layout.Context, x, y, w, h int, c color.NRGBA) {
+	rect := clip.Rect{Min: image.Pt(x, y), Max: image.Pt(x+w, y+h)}.Push(gtx.Ops)
+	paint.ColorOp{Color: c}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	rect.Pop()
 }

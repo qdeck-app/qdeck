@@ -670,6 +670,11 @@ func (a *Application) handleKeyEvents(gtx layout.Context) {
 				a.valuesState.AnchorOpName = ""
 			case a.valuesState.AnchorMenuOpen:
 				a.valuesState.AnchorMenuOpen = false
+			case a.navState.CurrentPage == state.PageValues && a.valuesState.SearchFocused(gtx):
+				// Escape clears a non-empty search field rather than leaving the page.
+				a.valuesState.SearchEditor.SetText("")
+				gtx.Execute(key.FocusCmd{Tag: &a.valuesState.SearchEditor})
+				gtx.Execute(op.InvalidateCmd{})
 			default:
 				a.navigateBack()
 			}
