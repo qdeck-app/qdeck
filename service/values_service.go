@@ -458,7 +458,6 @@ func (s *ValuesService) SaveRawBytes(ctx context.Context, raw []byte, destPath s
 }
 
 // CompareWithBaseline compares a current values file against baseline content (e.g. from git HEAD).
-// Returns a map of flat keys to their change status. Only added/modified keys are included.
 func (s *ValuesService) CompareWithBaseline(
 	ctx context.Context, currentFilePath string, baselineContent []byte,
 ) (map[string]domain.GitChangeStatus, error) {
@@ -494,9 +493,7 @@ func (s *ValuesService) CompareWithBaseline(
 		key := string(e.Key)
 
 		baseVal, exists := baseLookup[key]
-		if !exists {
-			changes[key] = domain.GitAdded
-		} else if baseVal != e.Value {
+		if exists && baseVal != e.Value {
 			changes[key] = domain.GitModified
 		}
 	}

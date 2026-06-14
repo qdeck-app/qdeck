@@ -343,10 +343,10 @@ func extraCountLabel(n int) string {
 	}
 
 	if n == 1 {
-		return "1 extra"
+		return "1 not in chart"
 	}
 
-	return formatStickyCount(n) + " extras"
+	return formatStickyCount(n) + " not in chart"
 }
 
 // formatEncodingLabel joins an encoding label and a line-ending label with
@@ -591,14 +591,11 @@ func (p *ValuesPage) layoutColumnFileStatus(gtx layout.Context, colIdx int) layo
 		children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Left: valuesPaddingSmall}.Layout(gtx,
 				func(gtx layout.Context) layout.Dimensions {
-					iconColor := theme.Default.Override
-					if col.OpenInEditorButton.Hovered() {
-						iconColor = theme.Default.OverrideStrong
-					}
-
 					return layoutIconButton(gtx, p.Theme, &col.OpenInEditorButton,
 						func(gtx layout.Context) layout.Dimensions {
-							return customwidget.LayoutVSCodeIcon(gtx, editorIconSize, iconColor)
+							// Neutral dark icon; the button's hover background
+							// (layoutIconButton) supplies the hover affordance.
+							return customwidget.LayoutVSCodeIcon(gtx, editorIconSize, theme.Default.Ink)
 						})
 				})
 		})

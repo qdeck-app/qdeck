@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -51,9 +52,9 @@ type Application struct {
 	closeGuard *closeguard.CloseGuard
 
 	// Services
-	repoService   *service.RepoService
-	chartService  *service.ChartService
-	recentService *service.RecentService
+	repoService  *service.RepoService
+	chartService *service.ChartService
+	appState     *service.AppStateService
 
 	// Navigation
 	navState state.NavigationState
@@ -106,6 +107,16 @@ type Application struct {
 	customDecor bool
 	winButtons  customwidget.WinButtons
 
+	// Window geometry persistence. captureWindowSize / handleConfigEvent feed
+	// the latest size + maximized state into geometrySaver, which debounces the
+	// writes (coalescing a drag-resize into one) and is flushed on close.
+	// lastSavedGeom skips re-scheduling identical geometry.
+	lastWindowedWidthDp  int
+	lastWindowedHeightDp int
+	windowMaximized      bool
+	lastSavedGeom        domain.WindowGeometry
+	geometrySaver        *async.Debouncer[domain.WindowGeometry]
+
 	// ops reused across frames
 	ops op.Ops
 }
@@ -115,7 +126,7 @@ func NewApplication(
 	repoSvc *service.RepoService,
 	chartSvc *service.ChartService,
 	valuesSvc *service.ValuesService,
-	recentSvc *service.RecentService,
+	appState *service.AppStateService,
 	templateSvc *service.TemplateService,
 	customDecor bool,
 ) *Application {
@@ -124,15 +135,15 @@ func NewApplication(
 	expl := explorer.NewExplorer(w)
 
 	a := &Application{
-		window:        w,
-		theme:         th,
-		explorer:      expl,
-		nativeDrop:    nativedrop.New(w),
-		closeGuard:    closeguard.New(w),
-		repoService:   repoSvc,
-		chartService:  chartSvc,
-		recentService: recentSvc,
-		customDecor:   customDecor,
+		window:       w,
+		theme:        th,
+		explorer:     expl,
+		nativeDrop:   nativedrop.New(w),
+		closeGuard:   closeguard.New(w),
+		repoService:  repoSvc,
+		chartService: chartSvc,
+		appState:     appState,
+		customDecor:  customDecor,
 	}
 
 	a.breadcrumb.MoveArea = customDecor
@@ -147,9 +158,15 @@ func NewApplication(
 	a.recentChartsRunner = async.NewRunner[[]domain.RecentChart](w, 1)
 	a.recentValuesEntriesRunner = async.NewRunner[[]domain.RecentValuesEntry](w, 1)
 
+	a.geometrySaver = async.NewDebouncer(geometrySaveDelay, func(g domain.WindowGeometry) {
+		if err := a.appState.SaveWindowGeometry(context.Background(), g); err != nil {
+			slog.Error("save window geometry", "error", err)
+		}
+	})
+
 	a.valuesCtrl = page.NewValuesController(
 		w, &a.navState, &a.valuesState, &a.chartState, &a.notificationState,
-		expl, valuesSvc, templateSvc, recentSvc, chartSvc,
+		expl, valuesSvc, templateSvc, appState, chartSvc,
 	)
 	a.valuesCtrl.CustomDecor = customDecor
 	a.valuesCtrl.OnOpenLocalChart = a.onOpenLocalChart
@@ -207,11 +224,14 @@ func (a *Application) Run() error {
 
 		switch e := e.(type) {
 		case app.DestroyEvent:
+			a.geometrySaver.Flush()
+
 			return e.Err
 		case app.ConfigEvent:
 			a.handleConfigEvent(e)
 		case app.FrameEvent:
 			gtx := app.NewContext(&a.ops, e)
+			a.captureWindowSize(e)
 			a.pollExternalEvents()
 			a.pollAsyncResults()
 			a.layout(gtx)
@@ -220,8 +240,51 @@ func (a *Application) Run() error {
 	}
 }
 
+// geometrySaveDelay coalesces a drag-resize into a single geometry write while
+// still capturing the final size if the process dies before the close handler
+// (DestroyEvent) runs.
+const geometrySaveDelay = 500 * time.Millisecond
+
 func (a *Application) handleConfigEvent(e app.ConfigEvent) {
-	a.winButtons.Maximized = e.Config.Mode == app.Maximized
+	a.windowMaximized = e.Config.Mode == app.Maximized
+	a.winButtons.Maximized = a.windowMaximized
+	a.scheduleGeometrySave()
+}
+
+// captureWindowSize records the current windowed size in Dp and schedules a
+// debounced persist. Maximized frames are skipped so the saved restore size
+// stays the real windowed size — windowMaximized is set from ConfigEvent, which
+// Gio delivers before the first FrameEvent, so a maximized restore never records
+// the screen-filling size here.
+func (a *Application) captureWindowSize(e app.FrameEvent) {
+	if a.windowMaximized {
+		return
+	}
+
+	a.lastWindowedWidthDp = int(math.Round(float64(e.Metric.PxToDp(e.Size.X))))
+	a.lastWindowedHeightDp = int(math.Round(float64(e.Metric.PxToDp(e.Size.Y))))
+	a.scheduleGeometrySave()
+}
+
+// scheduleGeometrySave debounces a write of the latest size + maximized state.
+// No-op until a real windowed size has been observed, and skips re-scheduling
+// when nothing changed so a stream of identical frames doesn't re-arm the timer.
+func (a *Application) scheduleGeometrySave() {
+	if a.lastWindowedWidthDp <= 0 || a.lastWindowedHeightDp <= 0 {
+		return
+	}
+
+	geom := domain.WindowGeometry{
+		WidthDp:   a.lastWindowedWidthDp,
+		HeightDp:  a.lastWindowedHeightDp,
+		Maximized: a.windowMaximized,
+	}
+	if geom == a.lastSavedGeom {
+		return
+	}
+
+	a.lastSavedGeom = geom
+	a.geometrySaver.Schedule(geom)
 }
 
 func (a *Application) pollExternalEvents() {
@@ -761,7 +824,7 @@ func (a *Application) preloadCharts(repos []domain.HelmRepository) {
 }
 
 func (a *Application) loadShowDocs() {
-	show, err := a.recentService.LoadShowDocs(context.Background())
+	show, err := a.appState.LoadShowDocs(context.Background())
 	if err != nil {
 		slog.Error("load show docs preference", "error", err)
 
@@ -773,18 +836,18 @@ func (a *Application) loadShowDocs() {
 
 func (a *Application) loadRecentCharts() {
 	a.recentChartsRunner.RunWithTimeout(config.RecentChartsLoadOperation, func(ctx context.Context) ([]domain.RecentChart, error) {
-		return a.recentService.ListRecentCharts(ctx)
+		return a.appState.ListRecentCharts(ctx)
 	})
 }
 
 //nolint:dupl // addRecentChart and onRemoveRecentChart call different service methods.
 func (a *Application) addRecentChart(entry domain.RecentChart) {
 	a.recentChartsRunner.RunWithTimeout(config.RecentChartsLoadOperation, func(ctx context.Context) ([]domain.RecentChart, error) {
-		if err := a.recentService.AddRecentChart(ctx, entry); err != nil {
+		if err := a.appState.AddRecentChart(ctx, entry); err != nil {
 			return nil, fmt.Errorf("add recent chart: %w", err)
 		}
 
-		return a.recentService.ListRecentCharts(ctx)
+		return a.appState.ListRecentCharts(ctx)
 	})
 }
 
@@ -1027,11 +1090,11 @@ func (a *Application) openChartByRef(ref domain.RecentChart) {
 //nolint:dupl // addRecentChart and onRemoveRecentChart call different service methods.
 func (a *Application) onRemoveRecentChart(idx int) {
 	a.recentChartsRunner.RunWithTimeout(config.RecentChartsLoadOperation, func(ctx context.Context) ([]domain.RecentChart, error) {
-		if err := a.recentService.RemoveRecentChart(ctx, idx); err != nil {
+		if err := a.appState.RemoveRecentChart(ctx, idx); err != nil {
 			return nil, fmt.Errorf("remove recent chart: %w", err)
 		}
 
-		return a.recentService.ListRecentCharts(ctx)
+		return a.appState.ListRecentCharts(ctx)
 	})
 }
 
@@ -1056,11 +1119,11 @@ func (a *Application) onSelectRecentValuesEntry(entry domain.RecentValuesEntry) 
 //nolint:dupl // Structurally similar to onRemoveRecentChart but operates on different type.
 func (a *Application) onRemoveRecentValuesEntry(idx int) {
 	a.recentValuesEntriesRunner.RunWithTimeout(config.RecentValuesEntriesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesEntry, error) {
-		if err := a.recentService.RemoveRecentValuesEntry(ctx, idx); err != nil {
+		if err := a.appState.RemoveRecentValuesEntry(ctx, idx); err != nil {
 			return nil, fmt.Errorf("remove recent values entry: %w", err)
 		}
 
-		return a.recentService.ListRecentValuesEntries(ctx)
+		return a.appState.ListRecentValuesEntries(ctx)
 	})
 }
 
@@ -1089,18 +1152,18 @@ func (a *Application) onPendingValuesConsumed(valuesPath string) {
 
 func (a *Application) loadRecentValuesEntries() {
 	a.recentValuesEntriesRunner.RunWithTimeout(config.RecentValuesEntriesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesEntry, error) {
-		return a.recentService.ListRecentValuesEntries(ctx)
+		return a.appState.ListRecentValuesEntries(ctx)
 	})
 }
 
 //nolint:dupl // Structurally similar to addRecentChart but operates on different type.
 func (a *Application) addRecentValuesEntry(entry domain.RecentValuesEntry) {
 	a.recentValuesEntriesRunner.RunWithTimeout(config.RecentValuesEntriesLoadOperation, func(ctx context.Context) ([]domain.RecentValuesEntry, error) {
-		if err := a.recentService.AddRecentValuesEntry(ctx, entry); err != nil {
+		if err := a.appState.AddRecentValuesEntry(ctx, entry); err != nil {
 			return nil, fmt.Errorf("add recent values entry: %w", err)
 		}
 
-		return a.recentService.ListRecentValuesEntries(ctx)
+		return a.appState.ListRecentValuesEntries(ctx)
 	})
 }
 

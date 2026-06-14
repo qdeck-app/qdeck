@@ -120,7 +120,7 @@ func (b *Breadcrumb) layoutContent(gtx layout.Context, th *material.Theme, actio
 
 				children[n] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return layout.Inset{Right: breadcrumbLogoGap}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						return LayoutLogo(gtx, breadcrumbLogoSize, theme.Default.Override)
+						return LayoutLogo(gtx, breadcrumbLogoSize, theme.Default.Ink)
 					})
 				})
 				n++

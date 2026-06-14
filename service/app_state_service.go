@@ -17,21 +17,23 @@ const (
 	maxRecentValues = 10
 )
 
-// RecentService manages recent charts and values files.
+// AppStateService is the persistence facade over the application's on-disk
+// AppData blob (JSONStore): recent charts and values, per-chart UI state, and
+// user preferences such as "show docs" and the window geometry.
 // All mutating methods use JSONStore.Update for atomic read-modify-write,
 // eliminating the need for a service-level mutex.
-type RecentService struct {
+type AppStateService struct {
 	store *storage.JSONStore
 }
 
-func NewRecentService(store *storage.JSONStore) *RecentService {
-	return &RecentService{store: store}
+func NewAppStateService(store *storage.JSONStore) *AppStateService {
+	return &AppStateService{store: store}
 }
 
 // ListRecentCharts returns all recent charts sorted by most recently opened.
 //
 //nolint:dupl // Structurally similar to ListRecentValues but operates on different slice.
-func (s *RecentService) ListRecentCharts(ctx context.Context) ([]domain.RecentChart, error) {
+func (s *AppStateService) ListRecentCharts(ctx context.Context) ([]domain.RecentChart, error) {
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("list recent charts: %w", ctx.Err())
 	}
@@ -45,7 +47,7 @@ func (s *RecentService) ListRecentCharts(ctx context.Context) ([]domain.RecentCh
 }
 
 // AddRecentChart adds a chart to the recent list, deduplicating and enforcing max limit.
-func (s *RecentService) AddRecentChart(ctx context.Context, entry domain.RecentChart) error {
+func (s *AppStateService) AddRecentChart(ctx context.Context, entry domain.RecentChart) error {
 	if err := entry.IsValid(); err != nil {
 		return fmt.Errorf("add recent chart: %w", err)
 	}
@@ -69,7 +71,7 @@ func (s *RecentService) AddRecentChart(ctx context.Context, entry domain.RecentC
 // RemoveRecentChart removes a chart at the given index.
 //
 //nolint:dupl // same shape as RemoveRecentValues{,Entry} but a different AppData slice
-func (s *RecentService) RemoveRecentChart(ctx context.Context, idx int) error {
+func (s *AppStateService) RemoveRecentChart(ctx context.Context, idx int) error {
 	return removeAt(ctx, s.store, "remove recent chart", idx,
 		func(data *storage.AppData) *[]domain.RecentChart { return &data.RecentCharts },
 	)
@@ -78,7 +80,7 @@ func (s *RecentService) RemoveRecentChart(ctx context.Context, idx int) error {
 // ListRecentValues returns all recent values files sorted by most recently opened.
 //
 //nolint:dupl // Structurally similar to ListRecentCharts but operates on different slice.
-func (s *RecentService) ListRecentValues(ctx context.Context) ([]domain.RecentValuesFile, error) {
+func (s *AppStateService) ListRecentValues(ctx context.Context) ([]domain.RecentValuesFile, error) {
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("list recent values: %w", ctx.Err())
 	}
@@ -92,7 +94,7 @@ func (s *RecentService) ListRecentValues(ctx context.Context) ([]domain.RecentVa
 }
 
 // AddRecentValues adds a values file path to the recent list.
-func (s *RecentService) AddRecentValues(ctx context.Context, path string) error {
+func (s *AppStateService) AddRecentValues(ctx context.Context, path string) error {
 	if path == "" {
 		return errors.New("add recent values: path required")
 	}
@@ -109,7 +111,7 @@ func (s *RecentService) AddRecentValues(ctx context.Context, path string) error 
 // RemoveRecentValues removes a values file at the given index.
 //
 //nolint:dupl // same shape as RemoveRecentChart / RemoveRecentValuesEntry but a different AppData slice
-func (s *RecentService) RemoveRecentValues(ctx context.Context, idx int) error {
+func (s *AppStateService) RemoveRecentValues(ctx context.Context, idx int) error {
 	return removeAt(ctx, s.store, "remove recent values", idx,
 		func(data *storage.AppData) *[]domain.RecentValuesFile { return &data.RecentValues },
 	)
@@ -117,7 +119,7 @@ func (s *RecentService) RemoveRecentValues(ctx context.Context, idx int) error {
 
 // LoadShowDocs returns the persisted "show docs" preference.
 // Returns false when the preference has never been saved.
-func (s *RecentService) LoadShowDocs(ctx context.Context) (bool, error) {
+func (s *AppStateService) LoadShowDocs(ctx context.Context) (bool, error) {
 	data, err := s.store.Load(ctx)
 	if err != nil {
 		return false, fmt.Errorf("load show docs: %w", err)
@@ -131,7 +133,7 @@ func (s *RecentService) LoadShowDocs(ctx context.Context) (bool, error) {
 }
 
 // SaveShowDocs persists the "show docs" preference.
-func (s *RecentService) SaveShowDocs(ctx context.Context, show bool) error {
+func (s *AppStateService) SaveShowDocs(ctx context.Context, show bool) error {
 	if err := s.store.Update(ctx, func(data *storage.AppData) error {
 		data.ShowDocs = &show
 
@@ -143,9 +145,33 @@ func (s *RecentService) SaveShowDocs(ctx context.Context, show bool) error {
 	return nil
 }
 
+// LoadWindowGeometry returns the persisted main-window geometry, or nil when
+// none has been saved yet (the caller falls back to default size/mode).
+func (s *AppStateService) LoadWindowGeometry(ctx context.Context) (*domain.WindowGeometry, error) {
+	data, err := s.store.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load window geometry: %w", err)
+	}
+
+	return data.WindowGeometry, nil
+}
+
+// SaveWindowGeometry persists the main-window geometry restored on next launch.
+func (s *AppStateService) SaveWindowGeometry(ctx context.Context, geom domain.WindowGeometry) error {
+	if err := s.store.Update(ctx, func(data *storage.AppData) error {
+		data.WindowGeometry = &geom
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("save window geometry: %w", err)
+	}
+
+	return nil
+}
+
 // LoadChartUIState returns the persisted UI state for the given chart key.
 // The bool is false when no state has been saved for the key yet.
-func (s *RecentService) LoadChartUIState(ctx context.Context, key string) (domain.ChartUIState, bool, error) {
+func (s *AppStateService) LoadChartUIState(ctx context.Context, key string) (domain.ChartUIState, bool, error) {
 	if key == "" {
 		return domain.ChartUIState{}, false, nil
 	}
@@ -170,7 +196,7 @@ const maxChartUIStates = 100
 // maxChartUIStates, the entry with the oldest LastTouchedAt is evicted —
 // approximate LRU, so the most-recently-used charts survive. One eviction per
 // Save call is sufficient because the cap can only be exceeded by one entry.
-func (s *RecentService) SaveChartUIState(ctx context.Context, key string, st domain.ChartUIState) error {
+func (s *AppStateService) SaveChartUIState(ctx context.Context, key string, st domain.ChartUIState) error {
 	if key == "" {
 		return nil
 	}
@@ -221,7 +247,7 @@ const maxRecentValuesEntries = 10
 // ListRecentValuesEntries returns all recent values+chart pairs.
 //
 //nolint:dupl // Structurally similar to ListRecentCharts but operates on different slice.
-func (s *RecentService) ListRecentValuesEntries(ctx context.Context) ([]domain.RecentValuesEntry, error) {
+func (s *AppStateService) ListRecentValuesEntries(ctx context.Context) ([]domain.RecentValuesEntry, error) {
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("list recent values entries: %w", ctx.Err())
 	}
@@ -235,7 +261,7 @@ func (s *RecentService) ListRecentValuesEntries(ctx context.Context) ([]domain.R
 }
 
 // AddRecentValuesEntry adds a values+chart pair, deduplicating and enforcing max limit.
-func (s *RecentService) AddRecentValuesEntry(ctx context.Context, entry domain.RecentValuesEntry) error {
+func (s *AppStateService) AddRecentValuesEntry(ctx context.Context, entry domain.RecentValuesEntry) error {
 	if entry.ValuesPath == "" {
 		return errors.New("add recent values entry: valuesPath required")
 	}
@@ -255,7 +281,7 @@ func (s *RecentService) AddRecentValuesEntry(ctx context.Context, entry domain.R
 // RemoveRecentValuesEntry removes a values entry at the given index.
 //
 //nolint:dupl // same shape as RemoveRecentChart / RemoveRecentValues but a different AppData slice
-func (s *RecentService) RemoveRecentValuesEntry(ctx context.Context, idx int) error {
+func (s *AppStateService) RemoveRecentValuesEntry(ctx context.Context, idx int) error {
 	return removeAt(ctx, s.store, "remove recent values entry", idx,
 		func(data *storage.AppData) *[]domain.RecentValuesEntry { return &data.RecentValuesEntries },
 	)

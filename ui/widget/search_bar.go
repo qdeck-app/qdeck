@@ -78,16 +78,12 @@ func (s *SearchBar) rebuildCacheIfNeeded(entries []service.FlatValueEntry) {
 }
 
 // FilterEntriesWithMultiOverrides returns indices matching key, value, comment,
-// or override editor text across multiple columns. When extrasOnly is true,
-// the result is further restricted to entries with IsCustomOnly == true
-// (keys defined only in the overlay file with no chart-defaults
-// counterpart) — used by the "✚ extras-only" toolbar pill.
+// or override editor text across multiple columns.
 //
 // Reuses the provided out slice to avoid per-frame allocations.
 func (s *SearchBar) FilterEntriesWithMultiOverrides(
 	entries []service.FlatValueEntry,
 	columnEditors [][]widget.Editor,
-	extrasOnly bool,
 	out []int,
 ) []int {
 	query := strings.ToLower(s.Editor.Text())
@@ -118,10 +114,6 @@ func (s *SearchBar) FilterEntriesWithMultiOverrides(
 	}
 
 	for i := range entries {
-		if extrasOnly && !entries[i].IsCustomOnly {
-			continue
-		}
-
 		if !matchesQuery(i) {
 			continue
 		}
