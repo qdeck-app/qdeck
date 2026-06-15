@@ -439,7 +439,10 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 			}
 		}
 
-		p.State.PendingFocusKey = ""
+		// Keep the key for re-resolution on later frames while a highlight is pending
+		if !p.State.PendingFocusHighlight {
+			p.State.PendingFocusKey = ""
+		}
 	}
 
 	// Clamp focused row to stay within filtered bounds.
@@ -542,6 +545,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		if done {
 			p.State.PendingFocusHighlight = false
 			p.State.FocusHighlightAttempts = 0
+			p.State.PendingFocusKey = ""
 
 			// Treat the restored focus as already-synced so we don't
 			// immediately re-persist it back to disk on the next
@@ -553,7 +557,7 @@ func (p *ValuesPage) Layout(gtx layout.Context) layout.Dimensions {
 		p.lastFocusedRow = p.State.FocusedRow
 		p.lastFocusedCol = p.State.FocusedCol
 
-		if p.OnCellFocusChanged != nil {
+		if p.OnCellFocusChanged != nil && !p.State.AwaitingFocusRestore {
 			p.OnCellFocusChanged(p.State.FocusedEntryKey(), p.State.FocusedCol)
 		}
 	}

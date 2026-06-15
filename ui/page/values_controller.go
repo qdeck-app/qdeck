@@ -565,6 +565,7 @@ func (vc *ValuesController) ResetState() {
 	vc.State.PendingFocusKey = ""
 	vc.State.PendingFocusHighlight = false
 	vc.State.FocusHighlightAttempts = 0
+	vc.State.AwaitingFocusRestore = false
 	vc.State.FocusedRow = 0
 	vc.State.FocusedCol = 0
 	vc.State.CollapsedKeys = nil
@@ -852,6 +853,11 @@ func (vc *ValuesController) loadSavedCellFocusAsync() {
 		return
 	}
 
+	// Suppress focus persistence until pollChartUIState applies the result, so
+	// the section-advance default focus can't race a save onto disk ahead of
+	// the real restored key.
+	vc.State.AwaitingFocusRestore = true
+
 	appState := vc.AppState
 
 	vc.ChartUIStateRunner.RunWithTimeout(config.ChartUIStateLoadOperation, func(ctx context.Context) (chartUIStateResult, error) {
@@ -879,6 +885,8 @@ func (vc *ValuesController) pollChartUIState() {
 	if res.Err != nil {
 		slog.Error("load chart ui state", "error", res.Err)
 
+		vc.State.AwaitingFocusRestore = false
+
 		return
 	}
 
@@ -886,6 +894,8 @@ func (vc *ValuesController) pollChartUIState() {
 	if res.Value.chartKey != vc.State.ChartKey() {
 		return
 	}
+
+	vc.State.AwaitingFocusRestore = false
 
 	if !res.Value.found {
 		return
