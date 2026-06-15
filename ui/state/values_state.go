@@ -344,6 +344,10 @@ type ValuesPageState struct {
 	PendingFocusHighlight  bool
 	FocusHighlightAttempts int
 
+	// AwaitingFocusRestore is true between a chart open and the moment its
+	// persisted UI state is applied (or found absent).
+	AwaitingFocusRestore bool
+
 	// CollapsedKeys is the effective set of section flat keys whose descendants
 	// are hidden on the values page. Map for O(1) ancestor-prefix checks during
 	// filter rebuild. During a search the page may auto-uncollapse ancestors of
